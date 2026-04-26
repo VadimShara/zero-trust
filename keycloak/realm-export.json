@@ -1,0 +1,41 @@
+{
+  "realm": "demo",
+  "enabled": true,
+  "loginWithEmailAllowed": true,
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "zero-trust-app",
+      "secret": "changeme",
+      "redirectUris": [
+        "http://idpadapter:8080/idp/callback",
+        "http://localhost:8080/idp/callback"
+      ],
+      "webOrigins": ["*"],
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "developer", "composite": false }
+    ]
+  },
+  "users": [
+    {
+      "username": "testuser",
+      "email": "test@test.com",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        { "type": "password", "value": "testpass", "temporary": false }
+      ],
+      "realmRoles": ["developer"]
+    }
+  ]
+}

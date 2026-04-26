@@ -1,0 +1,213 @@
+version: "3.9"
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────
+
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret
+      POSTGRES_MULTIPLE_DATABASES: authdb,trustdb,keycloak
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init.sh:z
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  kafka:
+    image: docker.io/confluentinc/cp-kafka:7.6.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: 35UfHTSLQ6WIGj1ZJoAXxg
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Identity Provider ───────────────────────────────────────────
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: start-dev --import-realm
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: secret
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:z
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ── Policy Engine ───────────────────────────────────────────────
+
+  opa:
+    image: docker.io/openpolicyagent/opa:latest
+    command: run --server --watch --addr=0.0.0.0:8181 /policies
+    volumes:
+      - ./toolkit/policies:/policies:z
+    expose:
+      - "8181"   # internal only — not exposed to host
+    healthcheck:
+      test: ["CMD", "/opa", "eval", "--format", "raw", "true"]
+      interval: 5s
+
+  # ── Application Services ────────────────────────────────────────
+
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    environment:
+      POSTGRES_DSN: postgres://auth:secret@postgres/authdb?sslmode=disable
+      MIGRATIONS_PATH: migrations
+      LOG_LEVEL: info
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  trust:
+    build:
+      context: .
+      dockerfile: services/trust/Dockerfile
+    environment:
+      POSTGRES_DSN: postgres://trust:secret@postgres/trustdb?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:9092
+      IP_REPUTATION_API_KEY: ${IP_REPUTATION_API_KEY:-}
+      MIGRATIONS_PATH: migrations
+      LOG_LEVEL: info
+    expose:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  token:
+    build:
+      context: .
+      dockerfile: services/token/Dockerfile
+    environment:
+      REDIS_URL: redis://redis:6379
+      KAFKA_BROKERS: kafka:9092
+      TRUST_SERVICE_URL: http://trust:8080
+      LOG_LEVEL: info
+    expose:
+      - "8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      trust:
+        condition: service_started
+
+  idpadapter:
+    build:
+      context: .
+      dockerfile: services/idpadapter/Dockerfile
+    environment:
+      KEYCLOAK_ISSUER: http://keycloak:8080/realms/demo
+      KEYCLOAK_CLIENT_ID: zero-trust-app
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      AUTH_SERVICE_URL: http://auth:8080
+      GATEWAY_PRIVATE_URL: http://gateway:8081
+      GATEWAY_PUBLIC_URL: http://gateway:3000
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+    expose:
+      - "8080"
+    depends_on:
+      keycloak:
+        condition: service_started
+      auth:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    environment:
+      CLIENT_ID: ${GATEWAY_CLIENT_ID}
+      CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET}
+      REDIS_URL: redis://redis:6379
+      OPA_URL: http://opa:8181
+      TOKEN_SERVICE_URL: http://token:8080
+      TRUST_SERVICE_URL: http://trust:8080
+      IDPADAPTER_URL: http://idpadapter:8080
+      KAFKA_BROKERS: kafka:9092
+      LOG_LEVEL: info
+    ports:
+      - "3000:3000"    # public port for clients
+    expose:
+      - "8081"         # private port for IDPAdapter callback (internal only)
+    depends_on:
+      opa:
+        condition: service_started
+      token:
+        condition: service_started
+      trust:
+        condition: service_started
+      idpadapter:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  audit:
+    build:
+      context: .
+      dockerfile: services/audit/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      POSTGRES_DSN: postgres://audit:secret@postgres/authdb?sslmode=disable
+      MIGRATIONS_PATH: migrations
+      LOG_LEVEL: info
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
