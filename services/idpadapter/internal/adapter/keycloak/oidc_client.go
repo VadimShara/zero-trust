@@ -3,6 +3,8 @@ package keycloak
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -14,20 +16,35 @@ import (
 // OIDCClient implements port.OIDCProvider against Keycloak (or any OIDC-compliant IDP).
 // It fetches the discovery document on init and keeps the provider in memory.
 type OIDCClient struct {
-	provider     *gooidc.Provider
-	verifier     *gooidc.IDTokenVerifier
-	oauth2Config *oauth2.Config
+	provider        *gooidc.Provider
+	verifier        *gooidc.IDTokenVerifier
+	oauth2Config    *oauth2.Config // used for token exchange (internal Docker URL)
+	internalBaseURL string         // e.g. "http://keycloak:8080"
+	publicBaseURL   string         // e.g. "http://localhost:8080" — used in browser redirects
 }
 
 var _ port.OIDCProvider = (*OIDCClient)(nil)
 
 // NewOIDCClient fetches the OIDC discovery document from issuer and builds
 // the oauth2 config. ctx is used only for the discovery request.
-func NewOIDCClient(ctx context.Context, issuer, clientID, clientSecret, redirectURI string) (*OIDCClient, error) {
+//
+// publicBaseURL is the scheme+host+port visible to the user's browser
+// (e.g. "http://localhost:8080"). When set, AuthorizeURL replaces the
+// internal Docker hostname with this value so the browser can reach Keycloak.
+// Leave empty to use the issuer URL as-is.
+func NewOIDCClient(ctx context.Context, issuer, clientID, clientSecret, redirectURI, publicBaseURL string) (*OIDCClient, error) {
 	provider, err := gooidc.NewProvider(ctx, issuer)
 	if err != nil {
 		return nil, err
 	}
+
+	// Derive the internal base URL (scheme + host, no path) from the issuer.
+	parsed, err := url.Parse(issuer)
+	if err != nil {
+		return nil, err
+	}
+	internalBase := parsed.Scheme + "://" + parsed.Host // "http://keycloak:8080"
+
 	return &OIDCClient{
 		provider: provider,
 		verifier: provider.Verifier(&gooidc.Config{ClientID: clientID}),
@@ -38,12 +55,28 @@ func NewOIDCClient(ctx context.Context, issuer, clientID, clientSecret, redirect
 			Endpoint:     provider.Endpoint(),
 			Scopes:       []string{gooidc.ScopeOpenID, "email", "profile"},
 		},
+		internalBaseURL: internalBase,
+		publicBaseURL:   publicBaseURL,
 	}, nil
 }
 
 // AuthorizeURL builds the Keycloak authorization URL with S256 PKCE.
+// When publicBaseURL is configured the browser-facing URL uses the public host
+// instead of the internal Docker hostname (e.g. localhost:8080 vs keycloak:8080).
 func (c *OIDCClient) AuthorizeURL(state, challenge string) string {
-	return c.oauth2Config.AuthCodeURL(state,
+	// Start with the endpoint from the discovery document (internal URL).
+	authURL := c.oauth2Config.Endpoint.AuthURL
+
+	// Swap the internal hostname for the public one so the browser can reach it.
+	if c.publicBaseURL != "" && c.internalBaseURL != "" {
+		authURL = strings.Replace(authURL, c.internalBaseURL, c.publicBaseURL, 1)
+	}
+
+	// Build a temporary config that points at the public auth URL.
+	pubConfig := *c.oauth2Config
+	pubConfig.Endpoint.AuthURL = authURL
+
+	return pubConfig.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("code_challenge", challenge),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 	)

@@ -148,6 +148,10 @@ services:
       KEYCLOAK_ISSUER: http://keycloak:8080/realms/demo
       KEYCLOAK_CLIENT_ID: zero-trust-app
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      # KEYCLOAK_PUBLIC_URL — base URL Keycloak is reachable at from the user's browser.
+      # For local dev: http://localhost:8080
+      # For production: https://auth.example.com
+      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
       AUTH_SERVICE_URL: http://auth:8080
       GATEWAY_PRIVATE_URL: http://gateway:8081
       GATEWAY_PUBLIC_URL: http://gateway:3000

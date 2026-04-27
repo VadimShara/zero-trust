@@ -34,6 +34,10 @@ func main() {
 
 	gatewayPublicURL := env("GATEWAY_PUBLIC_URL", "http://gateway:3000")
 	callbackURL := env("IDPADAPTER_CALLBACK_URL", "http://idpadapter:8080/idp/callback")
+	// Public base URL of Keycloak as seen from the user's browser.
+	// Inside Docker the hostname is "keycloak"; from the host it is "localhost".
+	// Set KEYCLOAK_PUBLIC_URL=http://localhost:8080 when running locally.
+	keycloakPublicURL := env("KEYCLOAK_PUBLIC_URL", "")
 
 	// ── OIDC provider ─────────────────────────────────────────────────────────
 	// Retry connecting to Keycloak up to 30 times (every 5s = 150s total).
@@ -44,6 +48,7 @@ func main() {
 		oidcClient, err = keycloakadapter.NewOIDCClient(
 			context.Background(),
 			keycloakIssuer, keycloakClientID, keycloakClientSecret, callbackURL,
+			keycloakPublicURL,
 		)
 		if err == nil {
 			break
