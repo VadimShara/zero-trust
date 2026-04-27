@@ -54,3 +54,23 @@ func (r *UserRepo) CreateIDPLink(ctx context.Context, link *entities.UserIDPLink
 	_, err := r.db.Exec(ctx, q, link.UserID, link.IDP, link.Sub, link.Email, link.CreatedAt)
 	return err
 }
+
+func (r *UserRepo) GetTOTPSecret(ctx context.Context, userID string) (string, error) {
+	var secret *string
+	err := r.db.QueryRow(ctx, `SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&secret)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", pkgerrors.ErrNotFound
+		}
+		return "", err
+	}
+	if secret == nil || *secret == "" {
+		return "", pkgerrors.ErrNotFound
+	}
+	return *secret, nil
+}
+
+func (r *UserRepo) SetTOTPSecret(ctx context.Context, userID, secret string) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET totp_secret = $1 WHERE id = $2`, secret, userID)
+	return err
+}

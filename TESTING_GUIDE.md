@@ -422,7 +422,7 @@ NEW_REFRESH_TOKEN=...   # from response
 ```bash
 curl -sf -X POST http://localhost:3000/token \
   -d "grant_type=refresh_token" \
-  -d "refresh_token=$REFRESH_TOKEN" \   # <-- the OLD token
+  -d "refresh_token=$REFRESH_TOKEN" \ 
   -d "client_secret=changeme"
 ```
 

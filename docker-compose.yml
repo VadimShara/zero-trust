@@ -152,13 +152,17 @@ services:
       # For local dev: http://localhost:8080
       # For production: https://auth.example.com
       KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      # IDPADAPTER_CALLBACK_URL — public URL the browser is redirected to after Keycloak login.
+      # Must be reachable from the user's browser (not a Docker-internal hostname).
+      IDPADAPTER_CALLBACK_URL: ${IDPADAPTER_CALLBACK_URL:-http://localhost:8090/idp/callback}
       AUTH_SERVICE_URL: http://auth:8080
       GATEWAY_PRIVATE_URL: http://gateway:8081
-      GATEWAY_PUBLIC_URL: http://gateway:3000
+      # GATEWAY_PUBLIC_URL — public URL of the gateway reachable from the user's browser.
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
-    expose:
-      - "8080"
+    ports:
+      - "8090:8080"   # exposed so the browser can reach /idp/callback after Keycloak login
     depends_on:
       keycloak:
         condition: service_started
@@ -179,6 +183,8 @@ services:
       TOKEN_SERVICE_URL: http://token:8080
       TRUST_SERVICE_URL: http://trust:8080
       IDPADAPTER_URL: http://idpadapter:8080
+      AUTH_SERVICE_URL: http://auth:8080
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
       KAFKA_BROKERS: kafka:9092
       LOG_LEVEL: info
     ports:
@@ -193,6 +199,8 @@ services:
       trust:
         condition: service_started
       idpadapter:
+        condition: service_started
+      auth:
         condition: service_started
       redis:
         condition: service_healthy

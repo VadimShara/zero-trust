@@ -10,6 +10,7 @@ require (
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.10.0 // indirect
@@ -29,6 +30,7 @@ require (
 	github.com/klauspost/compress v1.15.11 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/pierrec/lz4/v4 v4.1.16 // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
 	github.com/redis/go-redis/v9 v9.5.3 // indirect
 	github.com/segmentio/kafka-go v0.4.47 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect

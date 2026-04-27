@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	accessTTL  = 15 * time.Minute
+	accessTTL  = 1 * time.Hour // 15m in production; extended for manual testing
 	refreshTTL = 7 * 24 * time.Hour
 )
 

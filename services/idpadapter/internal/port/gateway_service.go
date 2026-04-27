@@ -9,5 +9,5 @@ type RequestCtx struct {
 }
 
 type GatewayService interface {
-	Continue(ctx context.Context, state, userID string, roles []string, rc RequestCtx) error
+	Continue(ctx context.Context, state, userID, email string, roles []string, rc RequestCtx) error
 }

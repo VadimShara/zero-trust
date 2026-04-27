@@ -708,7 +708,7 @@ IDPADAPTER_URL=http://idpadapter:8080
 KAFKA_BROKERS=kafka:9092
 
 # idpadapter
-KEYCLOAK_ISSUER=http://keycloak:8080/realms/demo
+KEYCLOAK_ISSUER=http://localhost:8080/realms/demo
 KEYCLOAK_CLIENT_ID=zero-trust-app
 KEYCLOAK_CLIENT_SECRET=changeme
 AUTH_SERVICE_URL=http://auth:8080

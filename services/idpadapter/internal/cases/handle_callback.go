@@ -58,7 +58,7 @@ func (c *HandleCallbackCase) Execute(ctx context.Context, code, state string, rc
 		return "", fmt.Errorf("resolve user: %w", err)
 	}
 
-	if err := c.gateway.Continue(ctx, state, userID, identity.Roles, rc); err != nil {
+	if err := c.gateway.Continue(ctx, state, userID, identity.Email, identity.Roles, rc); err != nil {
 		return "", fmt.Errorf("gateway continue: %w", err)
 	}
 

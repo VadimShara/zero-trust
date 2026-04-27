@@ -27,10 +27,11 @@ func NewGatewayClient(privateURL string) *GatewayClient {
 	}
 }
 
-func (c *GatewayClient) Continue(ctx context.Context, state, userID string, roles []string, rc port.RequestCtx) error {
+func (c *GatewayClient) Continue(ctx context.Context, state, userID, email string, roles []string, rc port.RequestCtx) error {
 	body := map[string]any{
 		"state":       state,
 		"user_id":     userID,
+		"email":       email,
 		"roles":       roles,
 		"request_ctx": rc,
 	}

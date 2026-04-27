@@ -4,8 +4,9 @@ import rego.v1
 
 default allow := false
 
-# Regular resources: role + minimum trust
+# Regular resources: role + minimum trust (sensitive resources require higher trust — see below)
 allow if {
+	not sensitive_resources[input.resource]
 	input.user.roles[_] == required_role[input.resource]
 	input.user.trust_score >= 0.60
 }

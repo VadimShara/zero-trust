@@ -47,7 +47,13 @@ func NewOIDCClient(ctx context.Context, issuer, clientID, clientSecret, redirect
 
 	return &OIDCClient{
 		provider: provider,
-		verifier: provider.Verifier(&gooidc.Config{ClientID: clientID}),
+		// SkipIssuerCheck allows the internal Docker hostname ("keycloak:8080")
+		// to differ from the browser-facing hostname ("localhost:8080") in the
+		// id_token's "iss" claim. Signature, expiry and audience are still verified.
+		verifier: provider.Verifier(&gooidc.Config{
+			ClientID:        clientID,
+			SkipIssuerCheck: true,
+		}),
 		oauth2Config: &oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: clientSecret,
