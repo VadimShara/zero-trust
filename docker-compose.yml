@@ -48,7 +48,9 @@ services:
   # ── Identity Provider ───────────────────────────────────────────
 
   keycloak:
-    image: quay.io/keycloak/keycloak:24.0
+    build:
+      context: keycloak
+      dockerfile: Dockerfile
     command: start-dev --import-realm
     environment:
       KC_DB: postgres
@@ -58,6 +60,9 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_HTTP_PORT: 8080
+      # Keycloak SPI Kafka event listener config
+      KC_SPI_EVENTS_LISTENER_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KC_SPI_EVENTS_LISTENER_KAFKA_TOPIC_EVENTS: keycloak.events
     ports:
       - "8080:8080"
     volumes:
@@ -66,10 +71,24 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      disable: true
+
+  keycloak-bridge:
+    build:
+      context: .
+      dockerfile: services/keycloak-bridge/Dockerfile
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KEYCLOAK_EVENTS_TOPIC: keycloak.events
+      AUTH_SERVICE_URL: http://auth:8080
+      TRUST_SERVICE_URL: http://trust:8080
+    depends_on:
+      kafka:
+        condition: service_healthy
+      auth:
+        condition: service_started
+      trust:
+        condition: service_started
 
   # ── Policy Engine ───────────────────────────────────────────────
 
@@ -78,8 +97,8 @@ services:
     command: run --server --watch --addr=0.0.0.0:8181 /policies
     volumes:
       - ./toolkit/policies:/policies:z
-    expose:
-      - "8181"   # internal only — not exposed to host
+    ports:
+      - "8181:8181"  # exposed for local policy testing
     healthcheck:
       test: ["CMD", "/opa", "eval", "--format", "raw", "true"]
       interval: 5s
@@ -184,6 +203,7 @@ services:
       TRUST_SERVICE_URL: http://trust:8080
       IDPADAPTER_URL: http://idpadapter:8080
       AUTH_SERVICE_URL: http://auth:8080
+      AUDIT_SERVICE_URL: http://audit:8080
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
       KAFKA_BROKERS: kafka:9092
       LOG_LEVEL: info
@@ -214,12 +234,48 @@ services:
       POSTGRES_DSN: postgres://audit:secret@postgres/authdb?sslmode=disable
       MIGRATIONS_PATH: migrations
       LOG_LEVEL: info
+    expose:
+      - "8080"
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
         condition: service_healthy
 
+  # ── Monitoring ──────────────────────────────────────────────────────────────
+
+  prometheus:
+    image: docker.io/prom/prometheus:v2.52.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      gateway:
+        condition: service_started
+      token:
+        condition: service_started
+
+  grafana:
+    image: docker.io/grafana/grafana:10.4.2
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:z
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:z
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "9091:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   redis_data:
+  prometheus_data:
+  grafana_data:

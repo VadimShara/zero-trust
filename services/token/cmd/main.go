@@ -20,7 +20,10 @@ import (
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
+	tkmetrics "github.com/zero-trust/zero-trust-auth/toolkit/pkg/metrics"
 )
+
+func metricsHandler() http.Handler { return tkmetrics.Handler() }
 
 func main() {
 	log := logger.NewLogger("")
@@ -53,13 +56,15 @@ func main() {
 
 	// ── Cases ─────────────────────────────────────────────────────────────────
 	issueCase := cases.NewIssueCase(accessStore, refreshStore, familyStore)
-	introspectCase := cases.NewIntrospectCase(accessStore, trustClient)
+	introspectCase := cases.NewIntrospectCase(accessStore, refreshStore, familyStore, trustClient, publisher)
 	refreshCase := cases.NewRefreshCase(accessStore, refreshStore, familyStore, publisher, trustClient)
 	revokeCase := cases.NewRevokeCase(accessStore, refreshStore)
+	adminRevokeCase := cases.NewAdminRevokeCase(familyStore, refreshStore, publisher)
 
 	// ── Routes ────────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle("GET /metrics", metricsHandler())
 
 	mux.HandleFunc("POST /tokens/issue", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -83,26 +88,38 @@ func main() {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		metricIssueTotal.Inc()
 		writeJSON(w, map[string]string{"access_token": atRaw, "refresh_token": rtRaw})
 	})
 
 	mux.HandleFunc("POST /tokens/introspect", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Token     string `json:"token"`
-			IP        string `json:"ip"`
-			UserAgent string `json:"user_agent"`
+			Token       string `json:"token"`
+			IP          string `json:"ip"`
+			UserAgent   string `json:"user_agent"`
+			Fingerprint string `json:"fingerprint"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
 
-		tc := port.TrustContext{IP: req.IP, UserAgent: req.UserAgent}
+		tc := port.TrustContext{IP: req.IP, UserAgent: req.UserAgent, Fingerprint: req.Fingerprint}
 		result, err := introspectCase.Execute(r.Context(), req.Token, tc)
 		if err != nil {
 			log.Error("introspect failed", "error", err)
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
+		}
+		switch {
+		case result.ForcedLogout:
+			metricIntrospectTotal.WithLabelValues("forced_logout").Inc()
+			metricForcedLogoutTotal.Inc()
+		case result.Active:
+			metricIntrospectTotal.WithLabelValues("active").Inc()
+			metricTrustScoreHistogram.Observe(result.TrustScore)
+		default:
+			metricIntrospectTotal.WithLabelValues("inactive").Inc()
 		}
 		writeJSON(w, map[string]any{
 			"active":      result.Active,
@@ -129,12 +146,14 @@ func main() {
 		atRaw, rtRaw, err := refreshCase.Execute(r.Context(), req.RefreshToken, tc)
 		if err != nil {
 			if err == pkgerrors.ErrTokenReuse {
+				metricRefreshTotal.WithLabelValues("reuse_attack").Inc()
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": "token_reuse_detected"})
 				return
 			}
 			if err == pkgerrors.ErrTokenExpired {
+				metricRefreshTotal.WithLabelValues("expired").Inc()
 				http.Error(w, "token expired or revoked", http.StatusUnauthorized)
 				return
 			}
@@ -142,6 +161,7 @@ func main() {
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
+		metricRefreshTotal.WithLabelValues("success").Inc()
 		writeJSON(w, map[string]string{"access_token": atRaw, "refresh_token": rtRaw})
 	})
 
@@ -161,6 +181,30 @@ func main() {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("POST /tokens/admin/revoke-user", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			UserID  string `json:"user_id"`
+			AdminID string `json:"admin_id"`
+			Reason  string `json:"reason"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		userID, err := uuid.Parse(req.UserID)
+		if err != nil {
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+		count, err := adminRevokeCase.RevokeUser(r.Context(), userID, req.AdminID, req.Reason)
+		if err != nil {
+			log.Error("admin revoke failed", "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"revoked_families": count, "user_id": req.UserID})
 	})
 
 	// ── Start ──────────────────────────────────────────────────────────────────

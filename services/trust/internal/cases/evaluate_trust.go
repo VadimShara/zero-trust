@@ -20,6 +20,8 @@ type EvaluateTrustInput struct {
 	UserAgent   string
 	Fingerprint string
 	Timestamp   time.Time
+	// Register=true persists new devices. Set only on login flows, never on API introspect.
+	Register bool
 }
 
 type EvaluateTrustCase struct {
@@ -61,18 +63,30 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	uaHash := hashStr(in.UserAgent, c.salt)
 
 	// ── signal 1: device_known (0.25) ────────────────────────────────────────
-	knownDevice, _ := c.devices.IsKnownDevice(ctx, in.UserID.String(), fpHash)
-	deviceScore := boolScore(knownDevice)
+	// No fingerprint → neutral (0.5): client doesn't support TLS fingerprinting.
+	// Known fingerprint → 1.0.  Unknown fingerprint → 0.0 (new/suspicious device).
+	deviceScore := 0.5
+	if in.Fingerprint != "" {
+		known, _ := c.devices.IsKnownDevice(ctx, in.UserID.String(), fpHash)
+		deviceScore = boolScore(known)
+	}
+	knownDevice := deviceScore == 1.0
 
 	// ── signal 2: ip_reputation (0.20) ───────────────────────────────────────
 	var ipCountry, ipASN string
-	ipRepScore := 1.0 // default: residential
-	if info, err := c.ipRep.Lookup(ctx, in.IP); err == nil {
-		if info.IsDatacenter || info.IsTor {
-			ipRepScore = 0.0
+	ipRepScore := 0.5 // default: unknown/private IP = neutral
+	if in.IP != "" {
+		if info, err := c.ipRep.Lookup(ctx, in.IP); err == nil {
+			switch {
+			case info.IsDatacenter || info.IsTor:
+				ipRepScore = 0.0
+			case info.Type == "residential":
+				ipRepScore = 1.0
+			// "unknown" type: keep 0.5
+			}
+			ipCountry = info.Country
+			ipASN = info.ASN
 		}
-		ipCountry = info.Country
-		ipASN = info.ASN
 	}
 
 	// ── signal 3: geo_anomaly (0.30) ─────────────────────────────────────────
@@ -82,7 +96,8 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	todScore := c.timeOfDayScore(ctx, in.UserID, in.Timestamp)
 
 	// ── signal 5: velocity (0.10) ────────────────────────────────────────────
-	fails, _ := c.cache.IncrFails(ctx, in.UserID)
+	// Read-only: IncrFails is called only on actual failed login attempts (anonymous_check).
+	fails, _ := c.cache.GetFails(ctx, in.UserID)
 	velScore := velocityScore(fails)
 
 	signals := []entities.RiskSignal{
@@ -104,7 +119,7 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	// ── async post-compute saves (don't block response) ───────────────────────
 	go func() {
 		bgCtx := context.Background()
-		if !knownDevice {
+		if in.Register && !knownDevice && in.Fingerprint != "" {
 			_ = c.devices.SaveDevice(bgCtx, in.UserID.String(), fpHash, uaHash)
 			_ = c.cache.AddDevice(bgCtx, in.UserID, fpHash)
 		}

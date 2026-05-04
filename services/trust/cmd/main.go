@@ -24,6 +24,7 @@ import (
 	"github.com/zero-trust/zero-trust-auth/services/trust/internal/entities"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
+	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/metrics"
 )
 
 func main() {
@@ -82,6 +83,7 @@ func main() {
 	// ── Routes ────────────────────────────────────────────────────────────────
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.Handle("GET /metrics", metrics.Handler())
 
 	mux.HandleFunc("POST /trust/anonymous-check", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -110,6 +112,7 @@ func main() {
 			UserAgent   string    `json:"user_agent"`
 			Fingerprint string    `json:"fingerprint"`
 			Timestamp   time.Time `json:"timestamp"`
+			Register    bool      `json:"register"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
@@ -131,6 +134,7 @@ func main() {
 			UserAgent:   req.UserAgent,
 			Fingerprint: req.Fingerprint,
 			Timestamp:   req.Timestamp,
+			Register:    req.Register,
 		})
 		if err != nil {
 			log.Error("evaluate trust failed", "error", err)
@@ -139,6 +143,44 @@ func main() {
 		}
 
 		writeJSON(w, evaluateResponse(score))
+	})
+
+	mux.HandleFunc("POST /trust/fails/incr", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			UserID string `json:"user_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		userID, err := uuid.Parse(req.UserID)
+		if err != nil {
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+		if _, err := trustCache.IncrFails(r.Context(), userID); err != nil {
+			log.Error("incr fails", "error", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("POST /trust/fails/reset", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			UserID string `json:"user_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		userID, err := uuid.Parse(req.UserID)
+		if err != nil {
+			http.Error(w, "invalid user_id", http.StatusBadRequest)
+			return
+		}
+		if err := trustCache.ResetFails(r.Context(), userID); err != nil {
+			log.Error("reset fails", "error", err)
+		}
+		w.WriteHeader(http.StatusOK)
 	})
 
 	// ── Start ──────────────────────────────────────────────────────────────────

@@ -40,8 +40,8 @@ func (c *TokenClient) Issue(ctx context.Context, userID string, roles []string, 
 	return result.AccessToken, result.RefreshToken, nil
 }
 
-func (c *TokenClient) Introspect(ctx context.Context, token string) (bool, string, []string, float64, error) {
-	body := map[string]string{"token": token}
+func (c *TokenClient) Introspect(ctx context.Context, token string, rc port.RequestCtx) (bool, string, []string, float64, error) {
+	body := map[string]any{"token": token, "ip": rc.IP, "user_agent": rc.UserAgent, "fingerprint": rc.Fingerprint}
 	resp, err := c.post(ctx, "/tokens/introspect", body)
 	if err != nil {
 		return false, "", nil, 0, err
@@ -98,6 +98,22 @@ func (c *TokenClient) Refresh(ctx context.Context, refreshToken string, rc port.
 		return "", "", err
 	}
 	return result.AccessToken, result.RefreshToken, nil
+}
+
+func (c *TokenClient) AdminRevokeUser(ctx context.Context, userID, adminID, reason string) (int, error) {
+	body := map[string]string{"user_id": userID, "admin_id": adminID, "reason": reason}
+	resp, err := c.post(ctx, "/tokens/admin/revoke-user", body)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		RevokedFamilies int `json:"revoked_families"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	return result.RevokedFamilies, nil
 }
 
 func (c *TokenClient) Revoke(ctx context.Context, token string, revokeAll bool) error {

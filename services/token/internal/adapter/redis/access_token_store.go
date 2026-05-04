@@ -54,6 +54,10 @@ func (s *AccessTokenStore) Delete(ctx context.Context, raw string) error {
 	return s.client.Del(ctx, accessKey(raw)).Err()
 }
 
+func (s *AccessTokenStore) DeleteByHash(ctx context.Context, hash string) error {
+	return s.client.Del(ctx, fmt.Sprintf("token:access:%s", hash)).Err()
+}
+
 func accessKey(raw string) string {
 	return fmt.Sprintf("token:access:%s", hashRaw(raw))
 }

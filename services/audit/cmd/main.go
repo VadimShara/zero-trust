@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -16,6 +19,8 @@ import (
 	kafkaadapter "github.com/zero-trust/zero-trust-auth/services/audit/internal/adapter/kafka"
 	pgadapter "github.com/zero-trust/zero-trust-auth/services/audit/internal/adapter/postgres"
 	"github.com/zero-trust/zero-trust-auth/services/audit/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/services/audit/internal/port"
+	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
 )
 
@@ -28,7 +33,6 @@ func main() {
 	kafkaBrokers := requireEnv(log, "KAFKA_BROKERS")
 	groupID := env("KAFKA_GROUP_ID", "audit-service")
 
-	// ── Postgres ─────────────────────────────────────────────────────────────
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
@@ -46,14 +50,75 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ── Wire ──────────────────────────────────────────────────────────────────
+	repo := pgadapter.NewAuditRepo(pool)
+	handleEvent := cases.NewHandleEventCase(repo)
+	queryEvents := cases.NewQueryEventsCase(repo)
+
+	// ── HTTP server ───────────────────────────────────────────────────────────
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("GET /audit/events", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		offset, _ := strconv.Atoi(q.Get("offset"))
+
+		f := port.QueryFilter{
+			UserID:    q.Get("user_id"),
+			EventType: q.Get("event_type"),
+			From:      q.Get("from"),
+			To:        q.Get("to"),
+			Limit:     limit,
+			Offset:    offset,
+		}
+
+		events, total, err := queryEvents.Execute(r.Context(), f)
+		if err != nil {
+			log.Error("query events failed", "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		type eventDTO struct {
+			ID        string         `json:"id"`
+			EventType string         `json:"event_type"`
+			UserID    *string        `json:"user_id,omitempty"`
+			Payload   map[string]any `json:"payload"`
+			CreatedAt string         `json:"created_at"`
+		}
+
+		dtos := make([]eventDTO, 0, len(events))
+		for _, e := range events {
+			dto := eventDTO{
+				ID:        e.ID.String(),
+				EventType: e.EventType,
+				Payload:   e.Payload,
+				CreatedAt: e.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			}
+			if e.UserID != nil {
+				s := e.UserID.String()
+				dto.UserID = &s
+			}
+			dtos = append(dtos, dto)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"events": dtos,
+			"total":  total,
+			"limit":  f.Limit,
+			"offset": f.Offset,
+		})
+	})
+
+	srv := httpserver.New(":8080", mux)
+
+	// ── Kafka consumer + HTTP — run concurrently ──────────────────────────────
 	consumer := kafkaadapter.NewConsumer(strings.Split(kafkaBrokers, ","), groupID)
 	defer consumer.Close()
 
-	repo := pgadapter.NewAuditRepo(pool)
-	handleEvent := cases.NewHandleEventCase(repo)
-
-	// ── Subscribe ─────────────────────────────────────────────────────────────
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -63,17 +128,25 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("audit service starting", "topics", topics, "group", groupID)
+	log.Info("audit service starting", "topics", topics, "addr", ":8080")
 
-	// Process messages until context is cancelled and channel is closed.
-	for msg := range messages {
-		if err := handleEvent.Execute(ctx, msg); err != nil {
-			log.Error("handle event failed",
-				"topic", msg.Topic,
-				"error", err,
-			)
-			// Continue — a single bad message must not stop the consumer.
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Run(ctx) }()
+
+	go func() {
+		for msg := range messages {
+			if err := handleEvent.Execute(ctx, msg); err != nil {
+				log.Error("handle event failed", "topic", msg.Topic, "error", err)
+			}
 		}
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			log.Error("http server failed", "error", err)
+		}
+	case <-ctx.Done():
 	}
 
 	log.Info("audit service stopped")
@@ -81,8 +154,6 @@ func main() {
 
 func runMigrations(log *slog.Logger, dsn string) error {
 	path := env("MIGRATIONS_PATH", "migrations")
-	// Use a separate migrations table so audit's version counter does not
-	// collide with auth's schema_migrations in the shared authdb.
 	sep := "&"
 	if !strings.Contains(dsn, "?") {
 		sep = "?"

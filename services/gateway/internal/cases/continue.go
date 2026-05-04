@@ -41,13 +41,20 @@ func (c *ContinueCase) Execute(ctx context.Context, in ContinueInput) error {
 		return pkgerrors.ErrNotFound
 	}
 
-	score, decision, err := c.trust.EvaluateTrust(ctx, in.UserID, in.Roles, in.ReqCtx)
+	// Use fingerprint captured at /authorize time — that's the actual browser fingerprint.
+	// register=true: persist the device on successful login so API requests recognize it.
+	rc := in.ReqCtx
+	if sess.Fingerprint != "" {
+		rc.Fingerprint = sess.Fingerprint
+	}
+	score, decision, err := c.trust.EvaluateTrust(ctx, in.UserID, in.Roles, rc, true)
 	if err != nil {
 		return err
 	}
 
 	switch decision {
 	case "ALLOW":
+		_ = c.trust.ResetFails(ctx, in.UserID)
 		return c.issueCode(ctx, sess, in.UserID, in.Roles, score)
 
 	case "MFA_REQUIRED", "STEP_UP":

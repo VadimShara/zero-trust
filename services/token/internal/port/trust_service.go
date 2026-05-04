@@ -14,5 +14,5 @@ type TrustContext struct {
 }
 
 type TrustService interface {
-	Evaluate(ctx context.Context, tc TrustContext) (trustScore float64, err error)
+	Evaluate(ctx context.Context, tc TrustContext) (trustScore float64, decision string, err error)
 }

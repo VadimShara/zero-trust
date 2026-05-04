@@ -39,6 +39,7 @@ func (c *AuthorizeCase) Execute(ctx context.Context, clientID, codeChallenge, me
 		ClientID:      clientID,
 		IP:            rc.IP,
 		UserAgent:     rc.UserAgent,
+		Fingerprint:   rc.Fingerprint,
 		CreatedAt:     time.Now().UTC(),
 	}
 	if err := c.sessions.Save(ctx, sess, sessionTTL); err != nil {

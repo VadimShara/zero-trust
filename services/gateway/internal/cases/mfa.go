@@ -18,10 +18,11 @@ type MFACase struct {
 	sessions port.SessionStore
 	mfa      port.MFAService
 	cont     *ContinueCase
+	trust    port.TrustService
 }
 
-func NewMFACase(sessions port.SessionStore, mfa port.MFAService, cont *ContinueCase) *MFACase {
-	return &MFACase{sessions: sessions, mfa: mfa, cont: cont}
+func NewMFACase(sessions port.SessionStore, mfa port.MFAService, cont *ContinueCase, trust port.TrustService) *MFACase {
+	return &MFACase{sessions: sessions, mfa: mfa, cont: cont, trust: trust}
 }
 
 // Setup returns TOTP enrollment info for the given state's pending user.
@@ -52,7 +53,8 @@ func (c *MFACase) Verify(ctx context.Context, state, code string) error {
 	if !valid {
 		return pkgerrors.ErrUnauthorized
 	}
-	// MFA passed — mark session as no longer pending and issue the code.
+	// MFA passed — reset fail counter (may have been set by Keycloak login failures).
+	_ = c.trust.ResetFails(ctx, sess.PendingUserID)
 	sess.MFAPending = false
 	if err := c.sessions.Save(ctx, sess, authcodeTTL); err != nil {
 		return err

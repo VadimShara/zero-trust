@@ -10,5 +10,9 @@ type RequestCtx struct {
 
 type TrustService interface {
 	AnonymousCheck(ctx context.Context, rc RequestCtx) (allow bool, err error)
-	EvaluateTrust(ctx context.Context, userID string, roles []string, rc RequestCtx) (score float64, decision string, err error)
+	// EvaluateTrust scores the request context. register=true tells the trust
+	// service to persist the device fingerprint (only on successful login).
+	EvaluateTrust(ctx context.Context, userID string, roles []string, rc RequestCtx, register bool) (score float64, decision string, err error)
+	IncrFails(ctx context.Context, userID string) error
+	ResetFails(ctx context.Context, userID string) error
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"html/template"
 	"log/slog"
@@ -21,6 +23,7 @@ import (
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
+	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/metrics"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/middleware"
 )
 
@@ -35,6 +38,7 @@ func main() {
 	idpURL := requireEnv(log, "IDPADAPTER_URL")
 	opaURL := requireEnv(log, "OPA_URL")
 	authURL := requireEnv(log, "AUTH_SERVICE_URL")
+	auditURL := requireEnv(log, "AUDIT_SERVICE_URL")
 	clientCallbackURL := env("CLIENT_CALLBACK_URL", "http://localhost:4000/callback")
 	gatewayPublicURL := env("GATEWAY_PUBLIC_URL", "http://localhost:3000")
 
@@ -59,12 +63,13 @@ func main() {
 	idpSvc := httpadapter.NewIDPAdapterClient(idpURL)
 	opaEngine := httpadapter.NewOPAClient(opaURL)
 	mfaSvc := httpadapter.NewMFAClient(authURL)
+	auditClient := httpadapter.NewAuditClient(auditURL)
 
 	// ── Cases ─────────────────────────────────────────────────────────────────
 	authorizeCase := cases.NewAuthorizeCase(sessions, trustSvc, idpSvc, clientID)
 	continueCase := cases.NewContinueCase(sessions, authcodes, trustSvc)
 	callbackCase := cases.NewCallbackCase(sessions, authcodes, clientCallbackURL)
-	mfaCase := cases.NewMFACase(sessions, mfaSvc, continueCase)
+	mfaCase := cases.NewMFACase(sessions, mfaSvc, continueCase, trustSvc)
 	exchangeCase := cases.NewExchangeCodeCase(authcodes, tokenSvc, clientSecret)
 	refreshCase := cases.NewRefreshCase(tokenSvc)
 	logoutCase := cases.NewLogoutCase(tokenSvc)
@@ -73,6 +78,7 @@ func main() {
 	pub := http.NewServeMux()
 	pub.Handle("/", middleware.Recovery()(http.NotFoundHandler()))
 	pub.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	pub.Handle("GET /metrics", metrics.Handler())
 
 	pub.HandleFunc("GET /authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -141,7 +147,7 @@ func main() {
 		}
 		if err := mfaCase.Verify(r.Context(), state, code); err != nil {
 			if err == pkgerrors.ErrUnauthorized {
-				// Wrong code — show form again with error message.
+				metricMFATotal.WithLabelValues("invalid_code").Inc()
 				setup, setupErr := mfaCase.Setup(r.Context(), state)
 				if setupErr != nil {
 					http.Error(w, "not found", http.StatusNotFound)
@@ -162,7 +168,7 @@ func main() {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		// MFA passed — redirect browser to /callback to complete the OAuth flow.
+		metricMFATotal.WithLabelValues("success").Inc()
 		http.Redirect(w, r, "/callback?state="+state, http.StatusFound)
 	})
 
@@ -189,17 +195,28 @@ func main() {
 		if execErr != nil {
 			switch execErr {
 			case pkgerrors.ErrTokenReuse:
+				metricTokenRefreshTotal.WithLabelValues("reuse_detected").Inc()
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_ = json.NewEncoder(w).Encode(map[string]string{"error": "token_reuse_detected"})
 			case pkgerrors.ErrNotFound, pkgerrors.ErrInvalidPKCE, pkgerrors.ErrUnauthorized,
 				pkgerrors.ErrTokenExpired:
+				if r.FormValue("grant_type") == "authorization_code" {
+					metricTokenExchangeTotal.WithLabelValues("invalid_grant").Inc()
+				} else {
+					metricTokenRefreshTotal.WithLabelValues("expired").Inc()
+				}
 				http.Error(w, "invalid_grant", http.StatusBadRequest)
 			default:
 				log.Error("token endpoint", "error", execErr)
 				http.Error(w, "server_error", http.StatusInternalServerError)
 			}
 			return
+		}
+		if r.FormValue("grant_type") == "authorization_code" {
+			metricTokenExchangeTotal.WithLabelValues("success").Inc()
+		} else {
+			metricTokenRefreshTotal.WithLabelValues("success").Inc()
 		}
 		writeJSON(w, resp)
 	})
@@ -228,7 +245,7 @@ func main() {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		active, userID, roles, score, err := tokenSvc.Introspect(r.Context(), req.Token)
+		active, userID, roles, score, err := tokenSvc.Introspect(r.Context(), req.Token, requestCtx(r))
 		if err != nil {
 			http.Error(w, "server error", http.StatusInternalServerError)
 			return
@@ -239,10 +256,64 @@ func main() {
 	})
 
 	// /api/* requires valid token + OPA approval
-	apiHandler := apiAuthMiddleware(tokenSvc, opaEngine, log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	apiHandler := apiAuthMiddleware(tokenSvc, opaEngine, log, gatewayPublicURL)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	pub.Handle("/api/", apiHandler)
+
+	// POST /admin/users/{id}/revoke — requires admin role (enforced by OPA via apiAuthMiddleware)
+	adminRevokeHandler := apiAuthMiddleware(tokenSvc, opaEngine, log, gatewayPublicURL)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Extract caller identity from introspect (already validated by middleware).
+			// Re-introspect to get admin's user_id for audit trail.
+			adminToken := bearerToken(r)
+			_, adminID, _, _, _ := tokenSvc.Introspect(r.Context(), adminToken, requestCtx(r))
+
+			targetUserID := r.PathValue("id")
+			if targetUserID == "" {
+				http.Error(w, "user_id required", http.StatusBadRequest)
+				return
+			}
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body.Reason == "" {
+				body.Reason = "admin_initiated"
+			}
+			count, err := tokenSvc.AdminRevokeUser(r.Context(), targetUserID, adminID, body.Reason)
+			if err != nil {
+				log.Error("admin revoke failed", "error", err, "target", targetUserID)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			log.Info("admin revoked user tokens",
+				"target_user", targetUserID, "admin", adminID, "families", count)
+			writeJSON(w, map[string]any{"revoked_families": count, "user_id": targetUserID})
+		}))
+	pub.Handle("POST /admin/users/{id}/revoke", adminRevokeHandler)
+
+	// GET /audit/events — requires security_admin role (OPA: resource=audit, trust≥0.85)
+	auditHandler := apiAuthMiddleware(tokenSvc, opaEngine, log, gatewayPublicURL)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			params := map[string]string{
+				"user_id":    q.Get("user_id"),
+				"event_type": q.Get("event_type"),
+				"from":       q.Get("from"),
+				"to":         q.Get("to"),
+				"limit":      q.Get("limit"),
+				"offset":     q.Get("offset"),
+			}
+			result, err := auditClient.QueryEvents(r.Context(), params)
+			if err != nil {
+				log.Error("audit query failed", "error", err)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, result)
+		}))
+	pub.Handle("GET /audit/events", auditHandler)
 
 	// ── Private mux (:8081) — internal network only ───────────────────────────
 	priv := http.NewServeMux()
@@ -265,16 +336,21 @@ func main() {
 		}); err != nil {
 			switch err {
 			case pkgerrors.ErrTrustDenied:
+				metricLoginTotal.WithLabelValues("DENY").Inc()
 				log.Error("continue: trust denied", "state", req.State, "user_id", req.UserID)
 				http.Error(w, "trust denied", http.StatusForbidden)
 			case pkgerrors.ErrNotFound:
 				http.Error(w, "session not found", http.StatusBadRequest)
 			default:
+				metricLoginTotal.WithLabelValues("error").Inc()
 				log.Error("continue failed", "error", err)
 				http.Error(w, "server error", http.StatusInternalServerError)
 			}
 			return
 		}
+		// ContinueCase stores MFAPending=true for MFA_REQUIRED; ALLOW issues code immediately.
+		// We can't distinguish here without reading the session, so we count all successes.
+		metricLoginTotal.WithLabelValues("success").Inc()
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -356,7 +432,8 @@ var mfaPageTmpl = template.Must(template.New("mfa").Parse(`<!DOCTYPE html>
 `))
 
 // apiAuthMiddleware introspects the Bearer token then asks OPA for a decision.
-func apiAuthMiddleware(tokens port.TokenService, policy port.PolicyEngine, log *slog.Logger) func(http.Handler) http.Handler {
+// A single OPA call returns both `allow` and `deny_reason` — no second request needed.
+func apiAuthMiddleware(tokens port.TokenService, policy port.PolicyEngine, _ *slog.Logger, gatewayPublicURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := bearerToken(r)
@@ -364,24 +441,59 @@ func apiAuthMiddleware(tokens port.TokenService, policy port.PolicyEngine, log *
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			active, userID, roles, score, err := tokens.Introspect(r.Context(), token)
+			active, userID, roles, score, err := tokens.Introspect(r.Context(), token, requestCtx(r))
 			if err != nil || !active {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			allowed, err := policy.Allow(r.Context(), userID, roles, score,
-				extractResource(r.URL.Path), methodToAction(r.Method))
-			if err != nil || !allowed {
+			resource := extractResource(r.URL.Path)
+			action := methodToAction(r.Method)
+			decision, err := policy.Decide(r.Context(), userID, roles, score, resource, action)
+			if err != nil {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
+			if !decision.Allow {
+				if decision.DenyReason == "insufficient_trust" {
+					metricForcedLogoutTotal.WithLabelValues(resource).Inc()
+					metricAPIRequestsTotal.WithLabelValues(resource, action, "insufficient_trust").Inc()
+					challenge := `Bearer error="insufficient_user_authentication",` +
+						`error_description="Trust score too low. Re-authenticate to step up.",` +
+						`acr_values="zero_trust_mfa",` +
+						`authorization_uri="` + gatewayPublicURL + `/authorize"`
+					w.Header().Set("WWW-Authenticate", challenge)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusUnauthorized)
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"error":             "insufficient_user_authentication",
+						"error_description": "Trust score too low. Re-authenticate to step up.",
+						"acr_values":        "zero_trust_mfa",
+						"authorization_uri": gatewayPublicURL + "/authorize",
+					})
+					return
+				}
+				metricAPIRequestsTotal.WithLabelValues(resource, action, "forbidden").Inc()
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			metricAPIRequestsTotal.WithLabelValues(resource, action, "allowed").Inc()
 			next.ServeHTTP(w, r)
 		})
 	}
 }
 
 func extractResource(path string) string {
-	parts := strings.SplitN(strings.TrimPrefix(path, "/api/"), "/", 2)
+	// /api/{resource}/... → resource
+	if rest, ok := strings.CutPrefix(path, "/api/"); ok {
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) > 0 && parts[0] != "" {
+			return parts[0]
+		}
+	}
+	// For all other protected paths (/admin/*, /audit/*) use the first segment.
+	// e.g. /admin/users/123/revoke → "admin"
+	//      /audit/events           → "audit"
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
 	if len(parts) > 0 && parts[0] != "" {
 		return parts[0]
 	}
@@ -411,11 +523,33 @@ func requestCtx(r *http.Request) port.RequestCtx {
 	if ip == "" {
 		ip, _, _ = net.SplitHostPort(r.RemoteAddr)
 	}
+	// Prefer a real TLS fingerprint (set by nginx/envoy JA3 module).
+	// Fall back to a soft fingerprint derived from stable browser headers —
+	// different browsers/OS combinations produce different values.
+	fp := r.Header.Get("X-TLS-Fingerprint")
+	if fp == "" {
+		fp = softFingerprint(r)
+	}
 	return port.RequestCtx{
 		IP:          ip,
 		UserAgent:   r.Header.Get("User-Agent"),
-		Fingerprint: r.Header.Get("X-TLS-Fingerprint"),
+		Fingerprint: fp,
 	}
+}
+
+// softFingerprint hashes stable HTTP headers that differ between browsers/OS.
+// Not as strong as JA3/JA4 but works without a TLS-terminating proxy.
+func softFingerprint(r *http.Request) string {
+	h := sha256.New()
+	for _, hdr := range []string{
+		r.Header.Get("User-Agent"),
+		r.Header.Get("Accept"),
+		r.Header.Get("Accept-Language"),
+		r.Header.Get("Accept-Encoding"),
+	} {
+		h.Write([]byte(hdr + "|"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

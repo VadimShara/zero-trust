@@ -42,7 +42,7 @@ func mintPair(
 	family port.TokenFamilyStore,
 ) (atRaw, rtRaw string, err error) {
 	at := entities.NewAccessToken(userID, roles, trustScore, familyID, accessTTL)
-	rt := entities.NewRefreshToken(userID, roles, familyID, refreshTTL)
+	rt := entities.NewRefreshToken(userID, roles, familyID, at.Hash, refreshTTL)
 
 	if err = access.Save(ctx, at.Raw, at, accessTTL); err != nil {
 		return "", "", err
@@ -50,9 +50,10 @@ func mintPair(
 	if err = refresh.Save(ctx, rt.Raw, rt, refreshTTL); err != nil {
 		return "", "", err
 	}
-	// Only refresh token hashes live in the family set — used by RevokeFamily.
 	if err = family.AddToken(ctx, familyID, rt.Hash); err != nil {
 		return "", "", err
 	}
+	// Track which families belong to this user for admin revocation.
+	_ = family.TrackUserFamily(ctx, userID, familyID)
 	return at.Raw, rt.Raw, nil
 }

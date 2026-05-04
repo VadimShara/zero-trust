@@ -64,5 +64,15 @@
         "developer"
       ]
     }
+  ],
+  "eventsListeners": [
+    "jboss-logging",
+    "kafka"
+  ],
+  "eventsEnabled": true,
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT"
   ]
 }

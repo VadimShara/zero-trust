@@ -41,11 +41,12 @@ func (c *TrustClient) AnonymousCheck(ctx context.Context, rc port.RequestCtx) (b
 	return result.Decision == "ALLOW", nil
 }
 
-func (c *TrustClient) EvaluateTrust(ctx context.Context, userID string, roles []string, rc port.RequestCtx) (float64, string, error) {
+func (c *TrustClient) EvaluateTrust(ctx context.Context, userID string, roles []string, rc port.RequestCtx, register bool) (float64, string, error) {
 	body := map[string]any{
 		"user_id": userID, "roles": roles,
 		"ip": rc.IP, "user_agent": rc.UserAgent, "fingerprint": rc.Fingerprint,
 		"timestamp": time.Now().UTC(),
+		"register":  register,
 	}
 	resp, err := c.post(ctx, "/trust/evaluate", body)
 	if err != nil {
@@ -61,6 +62,24 @@ func (c *TrustClient) EvaluateTrust(ctx context.Context, userID string, roles []
 		return 0, "", err
 	}
 	return result.TrustScore, result.Decision, nil
+}
+
+func (c *TrustClient) IncrFails(ctx context.Context, userID string) error {
+	resp, err := c.post(ctx, "/trust/fails/incr", map[string]string{"user_id": userID})
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *TrustClient) ResetFails(ctx context.Context, userID string) error {
+	resp, err := c.post(ctx, "/trust/fails/reset", map[string]string{"user_id": userID})
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
 }
 
 func (c *TrustClient) post(ctx context.Context, path string, body any) (*http.Response, error) {

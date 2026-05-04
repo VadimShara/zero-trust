@@ -6,6 +6,16 @@ import (
 	"github.com/zero-trust/zero-trust-auth/services/audit/internal/entities"
 )
 
+type QueryFilter struct {
+	UserID    string
+	EventType string
+	From      string // ISO8601
+	To        string // ISO8601
+	Limit     int
+	Offset    int
+}
+
 type AuditRepository interface {
 	Save(ctx context.Context, e *entities.AuditEvent) error
+	Query(ctx context.Context, f QueryFilter) ([]*entities.AuditEvent, int, error)
 }

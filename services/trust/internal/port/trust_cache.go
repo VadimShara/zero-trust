@@ -14,7 +14,9 @@ type TrustCache interface {
 	SetLastContext(ctx context.Context, userID uuid.UUID, tc *entities.TrustContext, ttl time.Duration) error
 	GetDeviceSet(ctx context.Context, userID uuid.UUID) ([]string, error)
 	AddDevice(ctx context.Context, userID uuid.UUID, hash string) error
+	GetFails(ctx context.Context, userID uuid.UUID) (int64, error)
 	IncrFails(ctx context.Context, userID uuid.UUID) (int64, error)
+	ResetFails(ctx context.Context, userID uuid.UUID) error
 	// IncrIPFails tracks anonymous (pre-auth) request rate per IP hash.
 	IncrIPFails(ctx context.Context, ipHash string) (int64, error)
 }

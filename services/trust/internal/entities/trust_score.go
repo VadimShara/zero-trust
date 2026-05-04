@@ -17,7 +17,7 @@ type TrustScore struct {
 
 func (t TrustScore) Decide() Decision {
 	switch {
-	case t.Value >= 0.80:
+	case t.Value >= 0.70:
 		return Allow
 	case t.Value >= 0.50:
 		return MFARequired

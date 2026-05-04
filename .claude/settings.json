@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST http://localhost:3000/token -d grant_type=refresh_token -d refresh_token=2a82874c60a447106afccc33c271a1c118cea48d5c013febd7456a758a16317b)",
+      "Bash(curl -s -X POST http://localhost:8181/v1/data/authz/allow -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.75},\"resource\":\"secrets\",\"action\":\"read\"}}')",
+      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\).get\\('result'\\)\\)\")",
+      "Bash(curl -s -X POST http://localhost:8181/v1/data/authz/allow -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.90},\"resource\":\"secrets\",\"action\":\"read\"}}')",
+      "Bash(curl -s -X POST http://localhost:8181/v1/data/authz/allow -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.65},\"resource\":\"projects\",\"action\":\"read\"}}')",
+      "Bash(xargs -r sudo docker exec -i vkr-redis-1 redis-cli DEL)",
+      "Bash(python3 -c 'import sys,json; d=json.load\\(sys.stdin\\); sigs={s['\\\\''name'\\\\'']:s['\\\\''score'\\\\''] for s in d['\\\\''signals'\\\\'']}; print\\('\\\\''score:'\\\\'', d['\\\\''trust_score'\\\\''], '\\\\''| device:'\\\\'', sigs['\\\\''device_known'\\\\'']\\)')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('error:', d.get\\('error'\\), d.get\\('error_description',''\\)\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s \"https://repo1.maven.org/maven2/org/keycloak/keycloak-server-spi/maven-metadata.xml\")",
+      "Bash(mvn dependency:get -Dartifact=org.keycloak:keycloak-core:24.0.5 -q)",
+      "Bash(mvn dependency:copy -Dartifact=org.keycloak:keycloak-core:24.0.5 -DoutputDirectory=/home/vadim/vkr/keycloak/kafka-listener/libs -q)",
+      "Bash(mvn dependency:get -Dartifact=org.keycloak:keycloak-server-spi:24.0.5 -q)",
+      "Bash(mvn dependency:copy -Dartifact=org.keycloak:keycloak-server-spi:24.0.5 -DoutputDirectory=/home/vadim/vkr/keycloak/kafka-listener/libs -q)",
+      "Bash(mvn dependency:get -Dartifact=org.apache.kafka:kafka-clients:3.6.2 -q)",
+      "Bash(chmod 777 /home/vadim/vkr/keycloak/kafka-listener/libs)",
+      "Bash(curl -sL __TRACKED_VAR__/org/keycloak/keycloak-core/24.0.5/keycloak-core-24.0.5.jar -o __TRACKED_VAR__/keycloak-core-24.0.5.jar)",
+      "Bash(curl -sL __TRACKED_VAR__/org/keycloak/keycloak-server-spi/24.0.5/keycloak-server-spi-24.0.5.jar -o __TRACKED_VAR__/keycloak-server-spi-24.0.5.jar)",
+      "Bash(curl -sL __TRACKED_VAR__/org/apache/kafka/kafka-clients/3.6.2/kafka-clients-3.6.2.jar -o __TRACKED_VAR__/kafka-clients-3.6.2.jar)",
+      "Bash(curl -sL https://repo1.maven.org/maven2/org/keycloak/keycloak-server-spi-private/24.0.5/keycloak-server-spi-private-24.0.5.jar -o /home/vadim/vkr/keycloak/kafka-listener/libs/keycloak-server-spi-private-24.0.5.jar)",
+      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\).get\\('error'\\)\\)\")",
+      "Bash(grep -v \"^$\")",
+      "Bash(curl -s -X POST http://localhost:8080/realms/demo/protocol/openid-connect/token -d client_id=zero-trust-app -d username=testuser -d password=NEWWRONG -d grant_type=password -d client_secret=changeme)",
+      "Bash(curl -s -X POST http://localhost:8080/realms/demo/protocol/openid-connect/token -d client_id=zero-trust-app -d username=testuser -d password=WRONG_NOW -d grant_type=password -d client_secret=changeme)",
+      "Bash(curl -s -X POST http://localhost:8080/realms/demo/protocol/openid-connect/token -d client_id=zero-trust-app -d username=testuser -d password=REALTIME -d grant_type=password -d client_secret=changeme)",
+      "Bash(curl -s -X POST http://localhost:8181/v1/data/authz/allow -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"security_admin\"],\"trust_score\":0.625},\"resource\":\"audit\",\"action\":\"read\"}}')",
+      "Bash(curl -s http://localhost:3000/metrics)",
+      "Bash(curl -s http://localhost:9090/api/v1/targets)",
+      "Bash(curl -s http://localhost:8080/metrics)",
+      "Bash(curl -s -u admin:admin http://localhost:9091/api/datasources)",
+      "Bash(curl -s -u admin:admin http://localhost:9091/api/search)",
+      "Bash(python3 -c \"import sys,json; r=json.load\\(sys.stdin\\)['result']; print\\('allow:', r['allow'], '| deny_reason:', r.get\\('deny_reason'\\)\\)\")",
+      "Bash(curl -s http://localhost:8181/v1/data/authz)",
+      "Bash(curl -si http://localhost:8181/v1/data/authz -X POST -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.50},\"resource\":\"projects\",\"action\":\"read\"}}')",
+      "Bash(curl -s http://localhost:8181/health)",
+      "Bash(python3 -c \"import sys,json; r=json.load\\(sys.stdin\\)['result']; print\\('allow:', r['allow'], '| deny_reason:', r.get\\('deny_reason','—'\\)\\)\")"
+    ]
+  }
+}

@@ -11,8 +11,20 @@ import (
 const failTTL = 15 * time.Minute // sliding window per Redis key schema
 
 // key: trust:fails:{userID}  TTL 15m  — per-user fail counter
+func (c *TrustCache) GetFails(ctx context.Context, userID uuid.UUID) (int64, error) {
+	val, err := c.client.Get(ctx, fmt.Sprintf("trust:fails:%s", userID)).Int64()
+	if err != nil {
+		return 0, nil // key missing = no fails
+	}
+	return val, nil
+}
+
 func (c *TrustCache) IncrFails(ctx context.Context, userID uuid.UUID) (int64, error) {
 	return c.incrWithTTL(ctx, fmt.Sprintf("trust:fails:%s", userID), failTTL)
+}
+
+func (c *TrustCache) ResetFails(ctx context.Context, userID uuid.UUID) error {
+	return c.client.Del(ctx, fmt.Sprintf("trust:fails:%s", userID)).Err()
 }
 
 // key: trust:fails:ip:{ipHash}  TTL 15m  — per-IP anonymous check counter

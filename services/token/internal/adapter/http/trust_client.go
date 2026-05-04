@@ -25,7 +25,7 @@ func NewTrustClient(baseURL string) *TrustClient {
 	}
 }
 
-func (c *TrustClient) Evaluate(ctx context.Context, tc port.TrustContext) (float64, error) {
+func (c *TrustClient) Evaluate(ctx context.Context, tc port.TrustContext) (float64, string, error) {
 	body := map[string]any{
 		"user_id":     tc.UserID.String(),
 		"ip":          tc.IP,
@@ -35,31 +35,32 @@ func (c *TrustClient) Evaluate(ctx context.Context, tc port.TrustContext) (float
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+"/trust/evaluate", bytes.NewReader(data))
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("trust service: status %d", resp.StatusCode)
+		return 0, "", fmt.Errorf("trust service: status %d", resp.StatusCode)
 	}
 
 	var result struct {
 		TrustScore float64 `json:"trust_score"`
+		Decision   string  `json:"decision"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return 0, err
+		return 0, "", err
 	}
-	return result.TrustScore, nil
+	return result.TrustScore, result.Decision, nil
 }
