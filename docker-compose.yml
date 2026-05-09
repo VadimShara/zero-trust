@@ -12,7 +12,7 @@ services:
       POSTGRES_MULTIPLE_DATABASES: authdb,trustdb,keycloak
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init.sh:z
+      - ./infra/scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init.sh:z
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
       interval: 5s
@@ -49,7 +49,7 @@ services:
 
   keycloak:
     build:
-      context: keycloak
+      context: infra/keycloak
       dockerfile: Dockerfile
     command: start-dev --import-realm
     environment:
@@ -66,7 +66,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:z
+      - ./infra/keycloak/realm-export.json:/opt/keycloak/data/import/realm.json:z
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +76,7 @@ services:
   keycloak-bridge:
     build:
       context: .
-      dockerfile: services/keycloak-bridge/Dockerfile
+      dockerfile: infra/keycloak-bridge/Dockerfile
     environment:
       KAFKA_BROKERS: kafka:9092
       KEYCLOAK_EVENTS_TOPIC: keycloak.events
@@ -108,7 +108,7 @@ services:
   auth:
     build:
       context: .
-      dockerfile: services/auth/Dockerfile
+      dockerfile: auth/Dockerfile
     environment:
       POSTGRES_DSN: postgres://auth:secret@postgres/authdb?sslmode=disable
       MIGRATIONS_PATH: migrations
@@ -122,7 +122,7 @@ services:
   trust:
     build:
       context: .
-      dockerfile: services/trust/Dockerfile
+      dockerfile: trust/Dockerfile
     environment:
       POSTGRES_DSN: postgres://trust:secret@postgres/trustdb?sslmode=disable
       REDIS_URL: redis://redis:6379
@@ -143,7 +143,7 @@ services:
   token:
     build:
       context: .
-      dockerfile: services/token/Dockerfile
+      dockerfile: token/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379
       KAFKA_BROKERS: kafka:9092
@@ -162,7 +162,7 @@ services:
   idpadapter:
     build:
       context: .
-      dockerfile: services/idpadapter/Dockerfile
+      dockerfile: idpadapter/Dockerfile
     environment:
       KEYCLOAK_ISSUER: http://keycloak:8080/realms/demo
       KEYCLOAK_CLIENT_ID: zero-trust-app
@@ -193,7 +193,7 @@ services:
   gateway:
     build:
       context: .
-      dockerfile: services/gateway/Dockerfile
+      dockerfile: gateway/Dockerfile
     environment:
       CLIENT_ID: ${GATEWAY_CLIENT_ID}
       CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET}
@@ -228,7 +228,7 @@ services:
   audit:
     build:
       context: .
-      dockerfile: services/audit/Dockerfile
+      dockerfile: audit/Dockerfile
     environment:
       KAFKA_BROKERS: kafka:9092
       POSTGRES_DSN: postgres://audit:secret@postgres/authdb?sslmode=disable
@@ -250,7 +250,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
+      - ./infra/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:z
       - prometheus_data:/prometheus
     ports:
       - "9090:9090"
@@ -266,8 +266,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: admin
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:z
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:z
+      - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:z
+      - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:z
       - grafana_data:/var/lib/grafana
     ports:
       - "9091:3000"

@@ -36,7 +36,8 @@
       "Bash(curl -s http://localhost:8181/v1/data/authz)",
       "Bash(curl -si http://localhost:8181/v1/data/authz -X POST -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.50},\"resource\":\"projects\",\"action\":\"read\"}}')",
       "Bash(curl -s http://localhost:8181/health)",
-      "Bash(python3 -c \"import sys,json; r=json.load\\(sys.stdin\\)['result']; print\\('allow:', r['allow'], '| deny_reason:', r.get\\('deny_reason','—'\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; r=json.load\\(sys.stdin\\)['result']; print\\('allow:', r['allow'], '| deny_reason:', r.get\\('deny_reason','—'\\)\\)\")",
+      "Bash(xargs sed -i 's|github.com/zero-trust/zero-trust-auth/services/|github.com/zero-trust/zero-trust-auth/|g')"
     ]
   }
 }

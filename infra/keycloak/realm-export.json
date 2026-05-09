@@ -1,0 +1,78 @@
+{
+  "realm": "demo",
+  "enabled": true,
+  "loginWithEmailAllowed": true,
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "zero-trust-app",
+      "secret": "changeme",
+      "redirectUris": [
+        "http://idpadapter:8080/idp/callback",
+        "http://localhost:8090/idp/callback"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "protocol": "openid-connect",
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "developer",
+        "composite": false
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "testuser",
+      "email": "test@test.com",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "testpass",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "developer"
+      ]
+    }
+  ],
+  "eventsListeners": [
+    "jboss-logging",
+    "kafka"
+  ],
+  "eventsEnabled": true,
+  "enabledEventTypes": [
+    "LOGIN",
+    "LOGIN_ERROR",
+    "LOGOUT"
+  ]
+}
