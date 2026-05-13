@@ -9,10 +9,8 @@ Browser → Gateway (3000) → Token Service
                          → Trust Service
                          → OPA (политики)
                          → Audit Service
-
-Browser → Keycloak (8080) → IDPAdapter (8090) → Gateway (internal)
-
-Keycloak → Kafka → keycloak-bridge → Trust Service (fail counter)
+                         → Keycloak
+                         → IDPAdapter
 ```
 
 **Сервисы:**
@@ -107,7 +105,7 @@ curl -s -X POST http://localhost:3000/introspect \
   -d '{"token": "ACCESS_TOKEN"}' | jq
 ```
 
-Ответ содержит `trust_score`, `login_signals` с детализацией по каждому сигналу и текущее решение.
+Ответ содержит `trust_score` с детализацией по каждому сигналу и текущее решение.
 
 ### MFA
 

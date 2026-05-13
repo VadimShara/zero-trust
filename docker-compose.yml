@@ -2,8 +2,6 @@ version: "3.9"
 
 services:
 
-  # ── Infrastructure ──────────────────────────────────────────────
-
   postgres:
     image: docker.io/library/postgres:16-alpine
     ports:
@@ -47,8 +45,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # ── Identity Provider ───────────────────────────────────────────
-
   keycloak:
     build:
       context: infra/keycloak
@@ -62,7 +58,6 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_HTTP_PORT: 8080
-      # Keycloak SPI Kafka event listener config
       KC_SPI_EVENTS_LISTENER_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KC_SPI_EVENTS_LISTENER_KAFKA_TOPIC_EVENTS: keycloak.events
     ports:
@@ -92,20 +87,16 @@ services:
       trust:
         condition: service_started
 
-  # ── Policy Engine ───────────────────────────────────────────────
-
   opa:
     image: docker.io/openpolicyagent/opa:latest
     command: run --server --watch --addr=0.0.0.0:8181 /policies
     volumes:
       - ./toolkit/policies:/policies:z
     ports:
-      - "8181:8181"  # exposed for local policy testing
+      - "8181:8181"
     healthcheck:
       test: ["CMD", "/opa", "eval", "--format", "raw", "true"]
       interval: 5s
-
-  # ── Application Services ────────────────────────────────────────
 
   auth:
     build:
@@ -169,16 +160,10 @@ services:
       KEYCLOAK_ISSUER: http://keycloak:8080/realms/demo
       KEYCLOAK_CLIENT_ID: zero-trust-app
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
-      # KEYCLOAK_PUBLIC_URL — base URL Keycloak is reachable at from the user's browser.
-      # For local dev: http://localhost:8080
-      # For production: https://auth.example.com
       KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
-      # IDPADAPTER_CALLBACK_URL — public URL the browser is redirected to after Keycloak login.
-      # Must be reachable from the user's browser (not a Docker-internal hostname).
       IDPADAPTER_CALLBACK_URL: ${IDPADAPTER_CALLBACK_URL:-http://localhost:8090/idp/callback}
       AUTH_SERVICE_URL: http://auth:8080
       GATEWAY_PRIVATE_URL: http://gateway:8081
-      # GATEWAY_PUBLIC_URL — public URL of the gateway reachable from the user's browser.
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
       TRUST_SERVICE_URL: http://trust:8080
       KEYCLOAK_REALM: demo
@@ -187,7 +172,7 @@ services:
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
     ports:
-      - "8090:8080"   # exposed so the browser can reach /idp/callback after Keycloak login
+      - "8090:8080"   
     depends_on:
       keycloak:
         condition: service_started
@@ -248,8 +233,6 @@ services:
       postgres:
         condition: service_healthy
 
-  # ── Client App ─────────────────────────────────────────────────────────────
-
   client-app:
     build:
       context: .
@@ -270,20 +253,16 @@ services:
       trust:
         condition: service_started
 
-  # ── Nginx (IP forwarding proxy) ─────────────────────────────────────────────
-
   nginx:
     image: docker.io/library/nginx:1.25-alpine
     volumes:
       - ./infra/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:z
     ports:
-      - "3000:3000"   # gateway public
-      - "4000:4000"   # client app
+      - "3000:3000" 
+      - "4000:4000"   
     depends_on:
       - gateway
       - client-app
-
-  # ── Monitoring ──────────────────────────────────────────────────────────────
 
   prometheus:
     image: docker.io/prom/prometheus:v2.52.0
