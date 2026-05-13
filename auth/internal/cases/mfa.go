@@ -9,27 +9,24 @@ import (
 )
 
 type MFACase struct {
-	users   UserRepository
-	issuer  string
+	users  UserRepository
+	issuer string
 }
 
 func NewMFACase(users UserRepository, issuer string) *MFACase {
 	return &MFACase{users: users, issuer: issuer}
 }
 
-// SetupResult is returned when a user enrolls for the first time.
 type SetupResult struct {
 	Secret     string
 	OTPAuthURI string
-	Enrolled   bool // false = first time setup, true = already enrolled
+	Enrolled   bool
 }
 
-// Setup returns the existing TOTP secret or generates a new one.
-// The OTPAuthURI can be used to display a QR code.
 func (c *MFACase) Setup(ctx context.Context, userID, email string) (*SetupResult, error) {
 	secret, err := c.users.GetTOTPSecret(ctx, userID)
 	if err == nil {
-		// Already enrolled — return URI without exposing secret again.
+		enrolled, _ := c.users.IsTOTPEnrolled(ctx, userID)
 		key, err := totp.Generate(totp.GenerateOpts{
 			Issuer:      c.issuer,
 			AccountName: email,
@@ -38,13 +35,13 @@ func (c *MFACase) Setup(ctx context.Context, userID, email string) (*SetupResult
 		if err != nil {
 			return nil, err
 		}
-		return &SetupResult{Secret: secret, OTPAuthURI: key.URL(), Enrolled: true}, nil
+		return &SetupResult{Secret: secret, OTPAuthURI: key.URL(), Enrolled: enrolled}, nil
 	}
+
 	if err != pkgerrors.ErrNotFound {
 		return nil, err
 	}
 
-	// First-time setup: generate a new secret.
 	key, err := totp.Generate(totp.GenerateOpts{
 		Issuer:      c.issuer,
 		AccountName: email,
@@ -52,13 +49,14 @@ func (c *MFACase) Setup(ctx context.Context, userID, email string) (*SetupResult
 	if err != nil {
 		return nil, err
 	}
+
 	if err := c.users.SetTOTPSecret(ctx, userID, key.Secret()); err != nil {
 		return nil, err
 	}
+
 	return &SetupResult{Secret: key.Secret(), OTPAuthURI: key.URL(), Enrolled: false}, nil
 }
 
-// Verify checks a 6-digit TOTP code against the user's stored secret.
 func (c *MFACase) Verify(ctx context.Context, userID, code string) (bool, error) {
 	secret, err := c.users.GetTOTPSecret(ctx, userID)
 	if err != nil {
@@ -67,5 +65,15 @@ func (c *MFACase) Verify(ctx context.Context, userID, code string) (bool, error)
 		}
 		return false, err
 	}
-	return totp.Validate(code, secret), nil
+
+	if !totp.Validate(code, secret) {
+		return false, nil
+	}
+
+	enrolled, _ := c.users.IsTOTPEnrolled(ctx, userID)
+	if !enrolled {
+		_ = c.users.SetTOTPEnrolled(ctx, userID)
+	}
+
+	return true, nil
 }

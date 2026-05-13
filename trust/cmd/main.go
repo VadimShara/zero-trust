@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	migrate "github.com/golang-migrate/migrate/v4"
@@ -15,11 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	rdb "github.com/redis/go-redis/v9"
 
+	trustcfg "github.com/zero-trust/zero-trust-auth/trust/config"
 	httpadapter "github.com/zero-trust/zero-trust-auth/trust/internal/adapter/http"
 	pgadapter "github.com/zero-trust/zero-trust-auth/trust/internal/adapter/postgres"
 	redisadapter "github.com/zero-trust/zero-trust-auth/trust/internal/adapter/redis"
 	"github.com/zero-trust/zero-trust-auth/trust/internal/cases"
 	"github.com/zero-trust/zero-trust-auth/trust/internal/transport"
+	pkgconfig "github.com/zero-trust/zero-trust-auth/toolkit/pkg/config"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
 )
@@ -27,13 +27,13 @@ import (
 func main() {
 	log := logger.NewLogger("")
 
-	dsn := requireEnv(log, "POSTGRES_DSN")
-	redisURL := requireEnv(log, "REDIS_URL")
-	salt := os.Getenv("HASH_SALT")
-	apiURL := os.Getenv("IP_REPUTATION_API_URL")
-	apiKey := os.Getenv("IP_REPUTATION_API_KEY")
+	var cfg trustcfg.Config
+	if err := pkgconfig.Load(pkgconfig.Path(), &cfg); err != nil {
+		log.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
 
-	pool, err := pgxpool.New(context.Background(), dsn)
+	pool, err := pgxpool.New(context.Background(), cfg.Postgres.DSN)
 	if err != nil {
 		log.Error("postgres connect failed", "error", err)
 		os.Exit(1)
@@ -45,12 +45,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := runMigrations(log, dsn); err != nil {
+	if err := runMigrations(log, cfg.Postgres.DSN, cfg.Postgres.MigrationsPath); err != nil {
 		log.Error("migrations failed", "error", err)
 		os.Exit(1)
 	}
 
-	opt, err := rdb.ParseURL(redisURL)
+	opt, err := rdb.ParseURL(cfg.Redis.URL)
 	if err != nil {
 		log.Error("redis url parse failed", "error", err)
 		os.Exit(1)
@@ -63,32 +63,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	trustCache := redisadapter.NewTrustCache(redisClient)
+	trustCache := redisadapter.NewTrustCache(redisClient,
+		cfg.Trust.Velocity.FailTTL,
+		cfg.Trust.AnonCheck.IPFailTTL,
+	)
 	ipRepCache := redisadapter.NewIPRepCache(redisClient)
-	ipRep := httpadapter.NewIPReputationClient(ipRepCache, apiURL, apiKey, salt)
+	ipRep := httpadapter.NewIPReputationClient(ipRepCache, cfg.IPRep.APIURL, cfg.IPRep.APIKey, cfg.HashSalt)
 	devices := pgadapter.NewDeviceRepo(pool)
 	loginHistory := pgadapter.NewLoginHistoryRepo(pool)
 	workingHours := pgadapter.NewWorkingHoursRepo(pool)
 
-	anonCheck := cases.NewAnonymousCheckCase(ipRep, trustCache, salt)
-	evalTrust := cases.NewEvaluateTrustCase(devices, loginHistory, workingHours, trustCache, ipRep, salt)
+	anonCheck := cases.NewAnonymousCheckCase(ipRep, trustCache, cfg.HashSalt, cfg.Trust.AnonCheck.MaxIPFails)
+	evalTrust := cases.NewEvaluateTrustCase(devices, loginHistory, workingHours, trustCache, ipRep, cfg.HashSalt, cfg.Trust)
 
 	mux := http.NewServeMux()
 	transport.NewHandler(log, cases.NewCases(anonCheck, evalTrust, trustCache)).Register(mux)
 
-	srv := httpserver.New(":8080", mux)
+	srv := httpserver.New(cfg.Server.Addr, mux)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("trust service starting", "addr", ":8080")
+	log.Info("trust service starting", "addr", cfg.Server.Addr)
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server stopped with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func runMigrations(log *slog.Logger, dsn string) error {
-	path := os.Getenv("MIGRATIONS_PATH")
+func runMigrations(log interface{ Info(string, ...any) }, dsn, path string) error {
 	if path == "" {
 		path = "migrations"
 	}
@@ -102,14 +104,3 @@ func runMigrations(log *slog.Logger, dsn string) error {
 	log.Info("migrations applied")
 	return nil
 }
-
-func requireEnv(log *slog.Logger, key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Error("required env var not set", "key", key)
-		os.Exit(1)
-	}
-	return v
-}
-
-var _ = strings.Contains

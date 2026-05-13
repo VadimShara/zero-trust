@@ -9,38 +9,37 @@ import (
 	"github.com/zero-trust/zero-trust-auth/token/internal/entities"
 )
 
-const (
-	accessTTL  = 1 * time.Hour // 15m in production; extended for manual testing
-	refreshTTL = 7 * 24 * time.Hour
-)
-
 type IssueCase struct {
-	access  AccessTokenStore
-	refresh RefreshTokenStore
-	family  TokenFamilyStore
+	access     AccessTokenStore
+	refresh    RefreshTokenStore
+	family     TokenFamilyStore
+	accessTTL  time.Duration
+	refreshTTL time.Duration
 }
 
-func NewIssueCase(access AccessTokenStore, refresh RefreshTokenStore, family TokenFamilyStore) *IssueCase {
-	return &IssueCase{access: access, refresh: refresh, family: family}
+func NewIssueCase(access AccessTokenStore, refresh RefreshTokenStore, family TokenFamilyStore, accessTTL, refreshTTL time.Duration) *IssueCase {
+	return &IssueCase{access: access, refresh: refresh, family: family, accessTTL: accessTTL, refreshTTL: refreshTTL}
 }
 
-func (c *IssueCase) Execute(ctx context.Context, userID uuid.UUID, roles []string, trustScore float64) (atRaw, rtRaw string, err error) {
+func (c *IssueCase) Execute(ctx context.Context, userID uuid.UUID, roles []string, trustScore float64, loginSignals map[string]entities.Signal) (atRaw, rtRaw string, err error) {
 	familyID := uuid.New()
-	return mintPair(ctx, userID, roles, trustScore, familyID, c.access, c.refresh, c.family)
+	return mintPair(ctx, userID, roles, trustScore, loginSignals, familyID, c.access, c.refresh, c.family, c.accessTTL, c.refreshTTL)
 }
 
-// mintPair is shared with RefreshCase for token rotation.
 func mintPair(
 	ctx context.Context,
 	userID uuid.UUID,
 	roles []string,
 	trustScore float64,
+	loginSignals map[string]entities.Signal,
 	familyID uuid.UUID,
 	access AccessTokenStore,
 	refresh RefreshTokenStore,
 	family TokenFamilyStore,
+	accessTTL time.Duration,
+	refreshTTL time.Duration,
 ) (atRaw, rtRaw string, err error) {
-	at := entities.NewAccessToken(userID, roles, trustScore, familyID, accessTTL)
+	at := entities.NewAccessToken(userID, roles, trustScore, loginSignals, familyID, accessTTL)
 	rt := entities.NewRefreshToken(userID, roles, familyID, at.Hash, refreshTTL)
 
 	if err = access.Save(ctx, at.Raw, at, accessTTL); err != nil {
@@ -52,7 +51,6 @@ func mintPair(
 	if err = family.AddToken(ctx, familyID, rt.Hash); err != nil {
 		return "", "", err
 	}
-	// Track which families belong to this user for admin revocation.
 	_ = family.TrackUserFamily(ctx, userID, familyID)
 	return at.Raw, rt.Raw, nil
 }

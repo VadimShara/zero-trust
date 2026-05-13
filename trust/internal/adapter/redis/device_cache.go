@@ -8,9 +8,8 @@ import (
 	"github.com/google/uuid"
 )
 
-const deviceSetTTL = 90 * 24 * time.Hour // 90 days per Redis key schema
+const deviceSetTTL = 90 * 24 * time.Hour
 
-// key: trust:devices:{userID}  TTL 90d  — Redis SET of fingerprint hashes
 func (c *TrustCache) GetDeviceSet(ctx context.Context, userID uuid.UUID) ([]string, error) {
 	key := fmt.Sprintf("trust:devices:%s", userID)
 	return c.client.SMembers(ctx, key).Result()

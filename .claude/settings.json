@@ -37,7 +37,29 @@
       "Bash(curl -si http://localhost:8181/v1/data/authz -X POST -H 'Content-Type: application/json' -d '{\"input\":{\"user\":{\"roles\":[\"developer\"],\"trust_score\":0.50},\"resource\":\"projects\",\"action\":\"read\"}}')",
       "Bash(curl -s http://localhost:8181/health)",
       "Bash(python3 -c \"import sys,json; r=json.load\\(sys.stdin\\)['result']; print\\('allow:', r['allow'], '| deny_reason:', r.get\\('deny_reason','—'\\)\\)\")",
-      "Bash(xargs sed -i 's|github.com/zero-trust/zero-trust-auth/services/|github.com/zero-trust/zero-trust-auth/|g')"
+      "Bash(xargs sed -i 's|github.com/zero-trust/zero-trust-auth/services/|github.com/zero-trust/zero-trust-auth/|g')",
+      "Bash(curl -sv -X POST http://localhost:8085/trust/evaluate -H 'Content-Type: application/json' -d '{\"user_id\":\"694cf7c5-0211-49b9-bd18-c2a3954ecac9\",\"ip\":\"1.2.3.4\",\"user_agent\":\"Mozilla/5.0\",\"fingerprint\":\"abc123\",\"register\":false}')",
+      "Bash(curl -s -X POST http://localhost:8085/trust/evaluate -H 'Content-Type: application/json' -d '{\"user_id\":\"694cf7c5-0211-49b9-bd18-c2a3954ecac9\",\"ip\":\"1.2.3.4\",\"user_agent\":\"Mozilla/5.0\",\"fingerprint\":\"abc123\",\"register\":false}')",
+      "Bash(docker exec *)",
+      "Bash(curl -s -X POST http://localhost:8085/trust/evaluate -H 'Content-Type: application/json' -d '{\"user_id\":\"694cf7c5-0211-49b9-bd18-c2a3954ecac9\",\"ip\":\"172.17.0.1\",\"user_agent\":\"Mozilla\",\"register\":false}')",
+      "Bash(curl -s -X POST http://localhost:8085/trust/evaluate -H 'Content-Type: application/json' -d '{\"user_id\":\"694cf7c5-0211-49b9-bd18-c2a3954ecac9\",\"ip\":\"8.8.8.8\",\"user_agent\":\"Mozilla\",\"register\":false}')",
+      "Bash(curl -s \"http://ip-api.com/json/5.101.82.88?fields=status,countryCode,isp,org,proxy,hosting,query\")",
+      "Bash(curl -s -X POST http://localhost:8085/trust/evaluate -H 'Content-Type: application/json' -d '{\"user_id\":\"694cf7c5-0211-49b9-bd18-c2a3954ecac9\",\"ip\":\"92.100.21.71\",\"user_agent\":\"Mozilla/5.0\",\"register\":false}')",
+      "Bash(curl -s http://localhost:3000/health)",
+      "Bash(curl -s http://localhost:4000/)",
+      "Bash(curl -v \"http://localhost:3000/authorize?client_id=zero-trust-app&code_challenge=test&code_challenge_method=S256&state=teststate123\")",
+      "Bash(curl -s -X POST http://localhost:8085/trust/anonymous-check -H 'Content-Type: application/json' -d '{\"ip\":\"127.0.0.1\",\"user_agent\":\"test\",\"fingerprint\":\"\"}')",
+      "Bash(mkdir -p /home/vadim/vkr/.claude/worktrees/agent-a2953c6d4cddee018/client-app/cmd/templates && cp /home/vadim/vkr/client-app/cmd/templates/* /home/vadim/vkr/.claude/worktrees/agent-a2953c6d4cddee018/client-app/cmd/templates/)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"BUILD EXIT: $?\")",
+      "Bash(go -C /home/vadim/vkr/.claude/worktrees/agent-a2953c6d4cddee018 build ./...)",
+      "Bash(go -C /home/vadim/vkr/.claude/worktrees/agent-a2953c6d4cddee018 vet ./...)",
+      "Bash(echo \"VET EXIT: $?\")",
+      "Bash(grep -rn \"^//\" /home/vadim/vkr --include=\"*.go\" --exclude-path=\"*/.claude/*\")",
+      "Bash(git -C /home/vadim/vkr diff --stat HEAD)"
+    ],
+    "additionalDirectories": [
+      "/home/vadim/vkr/client-app/cmd/templates"
     ]
   }
 }

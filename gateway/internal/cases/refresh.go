@@ -1,9 +1,6 @@
 package cases
 
-import (
-	"context"
-
-)
+import "context"
 
 type RefreshCase struct {
 	tokens TokenService

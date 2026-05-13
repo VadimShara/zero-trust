@@ -1,0 +1,30 @@
+@startuml er-auth
+title ER-диаграмма: auth
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+entity "users" as users {
+  * id          : UUID <<PK>> <<gen_random_uuid()>>
+  --
+  * created_at  : TIMESTAMPTZ <<DEFAULT now()>>
+    totp_secret : TEXT <<nullable>>
+}
+
+entity "user_idp_links" as links {
+  * idp        : TEXT <<PK>>
+  * sub        : TEXT <<PK>>
+  --
+  * user_id    : UUID <<FK>>
+    email      : TEXT <<nullable>>
+  * created_at : TIMESTAMPTZ <<DEFAULT now()>>
+}
+
+note right of links
+  PK составной: (idp, sub)
+  Индекс: idx_idp_links_user_id
+end note
+
+users ||--o{ links : "ON DELETE CASCADE"
+
+@enduml

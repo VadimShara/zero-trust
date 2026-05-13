@@ -12,8 +12,6 @@ import (
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
-// PKCEStore stores the idp_code_verifier keyed by OAuth state.
-// Redis key: idp:pkce:{state}  TTL 10m
 type PKCEStore struct {
 	client *rdb.Client
 }

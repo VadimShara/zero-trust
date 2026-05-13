@@ -1,0 +1,22 @@
+server:
+  public_addr: ":3000"
+  private_addr: ":8081"
+
+redis:
+  url: "${REDIS_URL}"
+
+client:
+  id: "${CLIENT_ID}"
+  secret: "${CLIENT_SECRET}"
+  callback_url: "${CLIENT_CALLBACK_URL}"
+
+public:
+  gateway_url: "${GATEWAY_PUBLIC_URL}"
+
+services:
+  trust: "${TRUST_SERVICE_URL}"
+  token: "${TOKEN_SERVICE_URL}"
+  idpadapter: "${IDPADAPTER_URL}"
+  opa: "${OPA_URL}"
+  auth: "${AUTH_SERVICE_URL}"
+  audit: "${AUDIT_SERVICE_URL}"

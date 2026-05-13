@@ -11,5 +11,6 @@ type AccessTokenStore interface {
 	Save(ctx context.Context, raw string, t *entities.AccessToken, ttl time.Duration) error
 	Get(ctx context.Context, raw string) (*entities.AccessToken, error)
 	Delete(ctx context.Context, raw string) error
+	GetByHash(ctx context.Context, hash string) (*entities.AccessToken, error)
 	DeleteByHash(ctx context.Context, hash string) error
 }

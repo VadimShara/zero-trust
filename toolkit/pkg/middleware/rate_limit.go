@@ -11,7 +11,7 @@ type bucket struct {
 	mu       sync.Mutex
 	tokens   float64
 	lastFill time.Time
-	rate     float64 // tokens per second
+	rate     float64
 }
 
 func (b *bucket) allow() bool {
@@ -22,7 +22,7 @@ func (b *bucket) allow() bool {
 	elapsed := now.Sub(b.lastFill).Seconds()
 	b.tokens += elapsed * b.rate
 	if b.tokens > b.rate {
-		b.tokens = b.rate // burst cap == rps
+		b.tokens = b.rate
 	}
 	b.lastFill = now
 
@@ -33,8 +33,6 @@ func (b *bucket) allow() bool {
 	return false
 }
 
-// RateLimit returns a middleware that limits each remote IP to rps
-// requests per second using a token bucket. Excess requests get 429.
 func RateLimit(rps int) func(http.Handler) http.Handler {
 	var buckets sync.Map
 	rate := float64(rps)

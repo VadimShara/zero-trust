@@ -1,0 +1,16 @@
+server:
+  addr: ":8080"
+
+postgres:
+  dsn: "${POSTGRES_DSN}"
+  migrations_path: "migrations"
+
+kafka:
+  brokers:
+    - "${KAFKA_BROKERS}"
+  group_id: "audit-service"
+  topics:
+    - "auth.events"
+    - "token.events"
+    - "access.events"
+    - "admin.events"

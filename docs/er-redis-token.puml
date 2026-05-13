@@ -1,0 +1,63 @@
+@startuml er-redis-token
+title Token — Redis Key Schema
+
+skinparam class {
+  BackgroundColor<<STRING>> #DDEEFF
+  BackgroundColor<<SET>>    #DDFFDD
+  BorderColor               #555555
+  ArrowColor                #555555
+}
+
+class "token:access:{sha256(raw)}" <<STRING>> {
+  TTL: 15m
+  --
+  Hash       : string
+  UserID     : uuid.UUID
+  Roles      : []string
+  TrustScore : float64
+  FamilyID   : uuid.UUID
+  Exp        : int64
+}
+
+class "token:refresh:{sha256(raw)}" <<STRING>> {
+  TTL: 7d
+  --
+  Hash     : string
+  ATHash   : string
+  UserID   : uuid.UUID
+  Roles    : []string
+  FamilyID : uuid.UUID
+  Status   : ACTIVE | CONSUMED | REVOKED
+  Exp      : int64
+}
+
+class "family:{familyID}" <<SET>> {
+  TTL: 7d
+  --
+  members : []string (sha256 of refresh raw)
+}
+
+class "family:revoked:{familyID}" <<STRING>> {
+  TTL: 7d
+  --
+  value : 1 (флаг отзыва)
+}
+
+class "user:families:{userID}" <<SET>> {
+  TTL: 7d
+  --
+  members : []string (familyID)
+}
+
+"token:access:{sha256(raw)}"  --> "family:{familyID}"          : FamilyID
+"token:refresh:{sha256(raw)}" --> "family:{familyID}"          : FamilyID
+"token:refresh:{sha256(raw)}" --> "token:access:{sha256(raw)}" : ATHash (парный AT)
+"family:{familyID}"           --> "family:revoked:{familyID}"  : отзыв семьи
+"user:families:{userID}"      --> "family:{familyID}"          : список семей пользователя
+
+note bottom of "family:{familyID}"
+  RevokeFamily итерирует все хеши из SET
+  и выставляет Status=REVOKED каждому RT
+end note
+
+@enduml

@@ -1,0 +1,55 @@
+server:
+  addr: ":8080"
+
+postgres:
+  dsn: "${POSTGRES_DSN}"
+  migrations_path: "migrations"
+
+redis:
+  url: "${REDIS_URL}"
+
+hash_salt: "${HASH_SALT}"
+
+ip_reputation:
+  api_url: "${IP_REPUTATION_API_URL}"
+  api_key: "${IP_REPUTATION_API_KEY}"
+
+trust:
+  signals:
+    device_known:
+      weight: 0.25
+    ip_reputation:
+      weight: 0.20
+    geo_anomaly:
+      weight: 0.30
+    time_of_day:
+      weight: 0.15
+    velocity:
+      weight: 0.10
+
+  thresholds:
+    allow: 0.70
+    mfa_required: 0.50
+    step_up: 0.30
+
+  velocity:
+    fail_ttl: 15m
+    low_threshold: 3
+    high_threshold: 10
+    low_score: 1.0
+    mid_score: 0.5
+    high_score: 0.0
+
+  ip_score:
+    datacenter_score: 0.0
+    tor_score: 0.0
+    residential_score: 1.0
+    unknown_score: 0.5
+
+  geo_anomaly:
+    max_speed_kmh: 900.0
+    unknown_score: 0.5
+
+  anon_check:
+    max_ip_fails: 20
+    ip_fail_ttl: 15m

@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/zero-trust/zero-trust-auth/token/internal/entities"
 )
 
 type Cases struct {
@@ -30,8 +32,8 @@ func NewCases(
 	}
 }
 
-func (c *Cases) IssueTokens(ctx context.Context, userID uuid.UUID, roles []string, trustScore float64) (atRaw, rtRaw string, err error) {
-	return c.issue.Execute(ctx, userID, roles, trustScore)
+func (c *Cases) IssueTokens(ctx context.Context, userID uuid.UUID, roles []string, trustScore float64, loginSignals map[string]entities.Signal) (atRaw, rtRaw string, err error) {
+	return c.issue.Execute(ctx, userID, roles, trustScore, loginSignals)
 }
 
 func (c *Cases) Introspect(ctx context.Context, rawToken string, tc TrustContext) (*IntrospectResult, error) {

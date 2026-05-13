@@ -1,0 +1,51 @@
+@startuml er-redis-gateway
+title Gateway — Redis Key Schema
+
+skinparam class {
+  BackgroundColor<<STRING>> #DDEEFF
+  BackgroundColor<<SET>>    #DDFFDD
+  BorderColor               #555555
+  ArrowColor                #555555
+}
+
+class "authcode:{code}" <<STRING>> {
+  TTL: 60s
+  --
+  Code          : string
+  UserID        : string
+  Roles         : []string
+  TrustScore    : float64
+  CodeChallenge : string
+}
+
+class "authcode:state:{state}" <<STRING>> {
+  TTL: 60s
+  --
+  value : string (own code)
+}
+
+class "session:{state}" <<STRING>> {
+  TTL: 10m
+  --
+  State         : string
+  CodeChallenge : string
+  ClientID      : string
+  IP            : string
+  UserAgent     : string
+  CreatedAt     : time.Time
+  Fingerprint   : string
+  MFAPending    : bool
+  PendingUserID : string
+  PendingRoles  : []string
+  PendingTrust  : float64
+  PendingEmail  : string
+}
+
+"authcode:state:{state}" --> "authcode:{code}" : refers to code
+
+note bottom of "authcode:{code}"
+  GetAndDelete — атомарное чтение+удаление
+  через Lua-скрипт (одноразовый код)
+end note
+
+@enduml

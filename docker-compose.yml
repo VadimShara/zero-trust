@@ -6,6 +6,8 @@ services:
 
   postgres:
     image: docker.io/library/postgres:16-alpine
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: secret
@@ -130,8 +132,8 @@ services:
       IP_REPUTATION_API_KEY: ${IP_REPUTATION_API_KEY:-}
       MIGRATIONS_PATH: migrations
       LOG_LEVEL: info
-    expose:
-      - "8080"
+    ports:
+      - "8085:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -178,6 +180,10 @@ services:
       GATEWAY_PRIVATE_URL: http://gateway:8081
       # GATEWAY_PUBLIC_URL — public URL of the gateway reachable from the user's browser.
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
+      TRUST_SERVICE_URL: http://trust:8080
+      KEYCLOAK_REALM: demo
+      KEYCLOAK_ADMIN_USER: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: info
     ports:
@@ -205,12 +211,12 @@ services:
       AUTH_SERVICE_URL: http://auth:8080
       AUDIT_SERVICE_URL: http://audit:8080
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
+      CLIENT_CALLBACK_URL: ${CLIENT_CALLBACK_URL:-http://localhost:4000/callback}
       KAFKA_BROKERS: kafka:9092
       LOG_LEVEL: info
-    ports:
-      - "3000:3000"    # public port for clients
     expose:
-      - "8081"         # private port for IDPAdapter callback (internal only)
+      - "3000"
+      - "8081"
     depends_on:
       opa:
         condition: service_started
@@ -241,6 +247,41 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  # ── Client App ─────────────────────────────────────────────────────────────
+
+  client-app:
+    build:
+      context: .
+      dockerfile: client-app/Dockerfile
+    environment:
+      GATEWAY_URL: http://gateway:3000
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:3000}
+      TRUST_URL: http://trust:8080
+      KEYCLOAK_PUBLIC_URL: ${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
+      CLIENT_ID: ${GATEWAY_CLIENT_ID}
+      CLIENT_SECRET: ${GATEWAY_CLIENT_SECRET}
+      PORT: "4000"
+    expose:
+      - "4000"
+    depends_on:
+      gateway:
+        condition: service_started
+      trust:
+        condition: service_started
+
+  # ── Nginx (IP forwarding proxy) ─────────────────────────────────────────────
+
+  nginx:
+    image: docker.io/library/nginx:1.25-alpine
+    volumes:
+      - ./infra/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:z
+    ports:
+      - "3000:3000"   # gateway public
+      - "4000:4000"   # client app
+    depends_on:
+      - gateway
+      - client-app
 
   # ── Monitoring ──────────────────────────────────────────────────────────────
 

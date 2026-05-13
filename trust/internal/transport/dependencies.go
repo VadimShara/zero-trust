@@ -14,4 +14,5 @@ type UseCases interface {
 	Evaluate(ctx context.Context, in cases.EvaluateTrustInput) (*entities.TrustScore, error)
 	IncrFails(ctx context.Context, userID uuid.UUID) (int64, error)
 	ResetFails(ctx context.Context, userID uuid.UUID) error
+	SyncFails(ctx context.Context, userID uuid.UUID, count int64) error
 }

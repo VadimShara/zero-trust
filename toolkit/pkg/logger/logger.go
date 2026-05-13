@@ -5,8 +5,6 @@ import (
 	"os"
 )
 
-// NewLogger returns a JSON structured logger. level is checked first;
-// if empty, LOG_LEVEL env var is used; defaults to info.
 func NewLogger(level string) *slog.Logger {
 	if level == "" {
 		level = os.Getenv("LOG_LEVEL")

@@ -29,6 +29,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /trust/evaluate", h.evaluate)
 	mux.HandleFunc("POST /trust/fails/incr", h.failsIncr)
 	mux.HandleFunc("POST /trust/fails/reset", h.failsReset)
+	mux.HandleFunc("POST /trust/fails/sync", h.failsSync)
 }
 
 func (h *Handler) anonymousCheck(w http.ResponseWriter, r *http.Request) {
@@ -127,22 +128,41 @@ func (h *Handler) failsReset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+func (h *Handler) failsSync(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID string `json:"user_id"`
+		Count  int64  `json:"count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, "invalid user_id", http.StatusBadRequest)
+		return
+	}
+	if err := h.cases.SyncFails(r.Context(), userID, req.Count); err != nil {
+		h.log.Error("sync fails", "error", err)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 type signalResponse struct {
-	Name   string  `json:"name"`
 	Score  float64 `json:"score"`
 	Weight float64 `json:"weight"`
 }
 
 type evaluateTrustResponse struct {
-	TrustScore float64          `json:"trust_score"`
-	Decision   string           `json:"decision"`
-	Signals    []signalResponse `json:"signals"`
+	TrustScore float64                    `json:"trust_score"`
+	Decision   string                     `json:"decision"`
+	Signals    map[string]signalResponse  `json:"signals"`
 }
 
 func toEvaluateResponse(ts *entities.TrustScore) evaluateTrustResponse {
-	sigs := make([]signalResponse, len(ts.Signals))
-	for i, s := range ts.Signals {
-		sigs[i] = signalResponse{Name: s.Name, Score: s.Score, Weight: s.Weight}
+	sigs := make(map[string]signalResponse, len(ts.Signals))
+	for _, s := range ts.Signals {
+		sigs[s.Name] = signalResponse{Score: s.Score, Weight: s.Weight}
 	}
 	return evaluateTrustResponse{
 		TrustScore: ts.Value,

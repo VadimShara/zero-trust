@@ -3,7 +3,6 @@ package cases
 import (
 	"context"
 	"fmt"
-
 )
 
 type HandleCallbackCase struct {
@@ -30,22 +29,12 @@ func NewHandleCallbackCase(
 	}
 }
 
-// Execute processes the browser callback from Keycloak after user login.
-// Returns the URL the browser should be redirected to (Gateway public /callback).
-//
-// Flow (ADR-003):
-//  1. Retrieve and delete one-time PKCE verifier from Redis
-//  2. Exchange idp_code → id_token with Keycloak, verify JWKS signature
-//  3. Extract sub, email, roles from id_token
-//  4. Map sub → internal user_id via Auth Service
-//  5. Notify Gateway on private port (user_id never appears in browser URL)
-//  6. Return redirect URL to Gateway /callback?state=state
 func (c *HandleCallbackCase) Execute(ctx context.Context, code, state string, rc RequestCtx) (string, error) {
 	verifier, err := c.pkce.Get(ctx, state)
 	if err != nil {
 		return "", fmt.Errorf("pkce verifier not found for state %q: %w", state, err)
 	}
-	_ = c.pkce.Delete(ctx, state) // one-time use — delete immediately
+	_ = c.pkce.Delete(ctx, state)
 
 	identity, err := c.oidc.Exchange(ctx, code, verifier)
 	if err != nil {

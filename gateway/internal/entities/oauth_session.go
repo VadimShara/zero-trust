@@ -10,15 +10,12 @@ type OAuthSession struct {
 	UserAgent     string
 	CreatedAt     time.Time
 
-	// Fingerprint captured at GET /authorize from the user's browser.
-	// Passed to trust service at continue time to register the device on ALLOW.
 	Fingerprint string
 
-	// Set by ContinueCase when trust decision is MFA_REQUIRED.
-	// The browser is held at GET /mfa until the user verifies the TOTP code.
-	MFAPending    bool
-	PendingUserID string
-	PendingRoles  []string
-	PendingTrust  float64
-	PendingEmail  string // shown on TOTP enrollment page
+	MFAPending      bool
+	PendingUserID   string
+	PendingRoles    []string
+	PendingTrust    float64
+	PendingEmail    string
+	PendingSignals  map[string]Signal
 }

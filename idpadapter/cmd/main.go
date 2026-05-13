@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,11 +10,13 @@ import (
 
 	rdb "github.com/redis/go-redis/v9"
 
+	idpcfg "github.com/zero-trust/zero-trust-auth/idpadapter/config"
 	httpadapter "github.com/zero-trust/zero-trust-auth/idpadapter/internal/adapter/http"
 	keycloakadapter "github.com/zero-trust/zero-trust-auth/idpadapter/internal/adapter/keycloak"
 	redisadapter "github.com/zero-trust/zero-trust-auth/idpadapter/internal/adapter/redis"
 	"github.com/zero-trust/zero-trust-auth/idpadapter/internal/cases"
 	"github.com/zero-trust/zero-trust-auth/idpadapter/internal/transport"
+	pkgconfig "github.com/zero-trust/zero-trust-auth/toolkit/pkg/config"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
 )
@@ -23,24 +24,19 @@ import (
 func main() {
 	log := logger.NewLogger("")
 
-	keycloakIssuer := requireEnv(log, "KEYCLOAK_ISSUER")
-	keycloakClientID := requireEnv(log, "KEYCLOAK_CLIENT_ID")
-	keycloakClientSecret := requireEnv(log, "KEYCLOAK_CLIENT_SECRET")
-	authServiceURL := requireEnv(log, "AUTH_SERVICE_URL")
-	gatewayPrivateURL := requireEnv(log, "GATEWAY_PRIVATE_URL")
-	redisURL := requireEnv(log, "REDIS_URL")
-
-	gatewayPublicURL := env("GATEWAY_PUBLIC_URL", "http://gateway:3000")
-	callbackURL := env("IDPADAPTER_CALLBACK_URL", "http://idpadapter:8080/idp/callback")
-	keycloakPublicURL := env("KEYCLOAK_PUBLIC_URL", "")
+	var cfg idpcfg.Config
+	if err := pkgconfig.Load(pkgconfig.Path(), &cfg); err != nil {
+		log.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
 
 	var oidcClient *keycloakadapter.OIDCClient
 	for attempt := 1; attempt <= 30; attempt++ {
 		var err error
 		oidcClient, err = keycloakadapter.NewOIDCClient(
 			context.Background(),
-			keycloakIssuer, keycloakClientID, keycloakClientSecret, callbackURL,
-			keycloakPublicURL,
+			cfg.Keycloak.Issuer, cfg.Keycloak.ClientID, cfg.Keycloak.ClientSecret, cfg.Keycloak.CallbackURL,
+			cfg.Keycloak.PublicURL,
 		)
 		if err == nil {
 			break
@@ -53,7 +49,7 @@ func main() {
 		time.Sleep(5 * time.Second)
 	}
 
-	opt, err := rdb.ParseURL(redisURL)
+	opt, err := rdb.ParseURL(cfg.Redis.URL)
 	if err != nil {
 		log.Error("redis url parse failed", "error", err)
 		os.Exit(1)
@@ -67,38 +63,22 @@ func main() {
 	}
 
 	pkceStore := redisadapter.NewPKCEStore(redisClient)
-	authClient := httpadapter.NewAuthClient(authServiceURL)
-	gatewayClient := httpadapter.NewGatewayClient(gatewayPrivateURL)
+	authClient := httpadapter.NewAuthClient(cfg.Services.Auth)
+	gatewayClient := httpadapter.NewGatewayClient(cfg.Services.GatewayPrivate)
 
 	getLoginURL := cases.NewGetLoginURLCase(pkceStore, oidcClient)
-	handleCallback := cases.NewHandleCallbackCase(pkceStore, oidcClient, authClient, gatewayClient, gatewayPublicURL)
+	handleCallback := cases.NewHandleCallbackCase(pkceStore, oidcClient, authClient, gatewayClient, cfg.Services.GatewayPublic)
 
 	mux := http.NewServeMux()
-	transport.NewHandler(log, cases.NewCases(getLoginURL, handleCallback)).Register(mux)
+	transport.NewHandler(log, cases.NewCases(getLoginURL, handleCallback, cfg.Keycloak.Issuer, cfg.Keycloak.PublicURL, cfg.Keycloak.ClientID)).Register(mux)
 
-	srv := httpserver.New(":8080", mux)
+	srv := httpserver.New(cfg.Server.Addr, mux)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("idpadapter starting", "addr", ":8080")
+	log.Info("idpadapter starting", "addr", cfg.Server.Addr)
 	if err := srv.Run(ctx); err != nil {
 		log.Error("server stopped with error", "error", err)
 		os.Exit(1)
 	}
-}
-
-func requireEnv(log *slog.Logger, key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Error("required env var not set", "key", key)
-		os.Exit(1)
-	}
-	return v
-}
-
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

@@ -4,7 +4,7 @@ import "context"
 
 type PolicyDecision struct {
 	Allow      bool
-	DenyReason string // "insufficient_trust" | "insufficient_role" | ""
+	DenyReason string
 }
 
 type PolicyEngine interface {

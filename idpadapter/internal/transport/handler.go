@@ -22,6 +22,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("GET /idp/login-url", h.loginURL)
 	mux.HandleFunc("GET /idp/callback", h.callback)
+	mux.HandleFunc("GET /idp/logout-url", h.logoutURL)
+}
+
+func (h *Handler) logoutURL(w http.ResponseWriter, r *http.Request) {
+	redirectURI := r.URL.Query().Get("post_logout_redirect_uri")
+	logoutURL := h.cases.GetLogoutURL(redirectURI)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"url": logoutURL})
 }
 
 func (h *Handler) loginURL(w http.ResponseWriter, r *http.Request) {

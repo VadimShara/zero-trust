@@ -9,11 +9,13 @@ import (
 )
 
 type RefreshCase struct {
-	access  AccessTokenStore
-	refresh RefreshTokenStore
-	family  TokenFamilyStore
-	events  EventPublisher
-	trust   TrustService
+	access     AccessTokenStore
+	refresh    RefreshTokenStore
+	family     TokenFamilyStore
+	events     EventPublisher
+	trust      TrustService
+	accessTTL  time.Duration
+	refreshTTL time.Duration
 }
 
 func NewRefreshCase(
@@ -22,8 +24,18 @@ func NewRefreshCase(
 	family TokenFamilyStore,
 	events EventPublisher,
 	trust TrustService,
+	accessTTL time.Duration,
+	refreshTTL time.Duration,
 ) *RefreshCase {
-	return &RefreshCase{access: access, refresh: refresh, family: family, events: events, trust: trust}
+	return &RefreshCase{
+		access:     access,
+		refresh:    refresh,
+		family:     family,
+		events:     events,
+		trust:      trust,
+		accessTTL:  accessTTL,
+		refreshTTL: refreshTTL,
+	}
 }
 
 func (c *RefreshCase) Execute(ctx context.Context, rawRefresh string, tc TrustContext) (atRaw, rtRaw string, err error) {
@@ -37,8 +49,6 @@ func (c *RefreshCase) Execute(ctx context.Context, rawRefresh string, tc TrustCo
 
 	switch rt.Status {
 	case entities.Consumed:
-		// Token reuse attack — revoke all refresh tokens in the family and
-		// mark the family as revoked so access tokens are rejected on introspect.
 		_ = c.refresh.RevokeFamily(ctx, rt.FamilyID)
 		_ = c.family.MarkRevoked(ctx, rt.FamilyID)
 		_ = c.events.Publish(ctx, "token.events", map[string]any{
@@ -53,18 +63,16 @@ func (c *RefreshCase) Execute(ctx context.Context, rawRefresh string, tc TrustCo
 		return "", "", pkgerrors.ErrTokenExpired
 	}
 
-	// Mark old RT consumed and delete its paired AT — it must not outlive the rotation.
 	if err = c.refresh.MarkConsumed(ctx, rawRefresh); err != nil {
 		return "", "", err
 	}
-	_ = c.access.DeleteByHash(ctx, rt.ATHash) // best-effort: AT may have already expired
+	_ = c.access.DeleteByHash(ctx, rt.ATHash)
 
-	// Re-evaluate trust with current request context.
 	tc.UserID = rt.UserID
 	trustScore := 0.0
 	if score, _, err := c.trust.Evaluate(ctx, tc); err == nil {
 		trustScore = score
 	}
 
-	return mintPair(ctx, rt.UserID, rt.Roles, trustScore, rt.FamilyID, c.access, c.refresh, c.family)
+	return mintPair(ctx, rt.UserID, rt.Roles, trustScore, nil, rt.FamilyID, c.access, c.refresh, c.family, c.accessTTL, c.refreshTTL)
 }

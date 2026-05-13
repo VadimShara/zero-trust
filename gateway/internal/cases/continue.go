@@ -11,7 +11,7 @@ import (
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
-const authcodeTTL = 5 * time.Minute // 60s is too short for manual testing; spec says 60s for production
+const authcodeTTL = 5 * time.Minute
 
 type ContinueInput struct {
 	State  string
@@ -31,30 +31,30 @@ func NewContinueCase(sessions SessionStore, authcodes AuthCodeStore, trust Trust
 	return &ContinueCase{sessions: sessions, authcodes: authcodes, trust: trust}
 }
 
-// Execute is called by the private port (:8081) after IDPAdapter resolves user identity.
-// On ALLOW it generates own_code immediately.
-// On MFA_REQUIRED it saves the pending user info in the session so GET /mfa can challenge the user.
 func (c *ContinueCase) Execute(ctx context.Context, in ContinueInput) error {
 	sess, err := c.sessions.Get(ctx, in.State)
 	if err != nil {
 		return pkgerrors.ErrNotFound
 	}
 
-	// Use fingerprint captured at /authorize time — that's the actual browser fingerprint.
-	// register=true: persist the device on successful login so API requests recognize it.
 	rc := in.ReqCtx
+	if sess.IP != "" {
+		rc.IP = sess.IP
+	}
+
 	if sess.Fingerprint != "" {
 		rc.Fingerprint = sess.Fingerprint
 	}
-	score, decision, err := c.trust.EvaluateTrust(ctx, in.UserID, in.Roles, rc, true)
+
+	score, decision, signals, err := c.trust.EvaluateTrust(ctx, in.UserID, in.Roles, rc, false)
 	if err != nil {
 		return err
 	}
 
 	switch decision {
 	case "ALLOW":
-		_ = c.trust.ResetFails(ctx, in.UserID)
-		return c.issueCode(ctx, sess, in.UserID, in.Roles, score)
+		_, _, _, _ = c.trust.EvaluateTrust(ctx, in.UserID, in.Roles, rc, true)
+		return c.issueCode(ctx, sess, in.UserID, in.Roles, score, signals)
 
 	case "MFA_REQUIRED", "STEP_UP":
 		slog.Info("trust requires MFA, suspending flow", "decision", decision, "score", score, "user_id", in.UserID)
@@ -63,20 +63,19 @@ func (c *ContinueCase) Execute(ctx context.Context, in ContinueInput) error {
 		sess.PendingRoles = in.Roles
 		sess.PendingTrust = score
 		sess.PendingEmail = in.Email
-		// Extend session TTL to give the user time to complete MFA.
+		sess.PendingSignals = signals
 		return c.sessions.Save(ctx, sess, authcodeTTL)
 
-	default: // DENY
+	default:
 		return pkgerrors.ErrTrustDenied
 	}
 }
 
-// IssueCodeAfterMFA is called by MFACase after successful TOTP verification.
 func (c *ContinueCase) IssueCodeAfterMFA(ctx context.Context, sess *entities.OAuthSession) error {
-	return c.issueCode(ctx, sess, sess.PendingUserID, sess.PendingRoles, sess.PendingTrust)
+	return c.issueCode(ctx, sess, sess.PendingUserID, sess.PendingRoles, sess.PendingTrust, sess.PendingSignals)
 }
 
-func (c *ContinueCase) issueCode(ctx context.Context, sess *entities.OAuthSession, userID string, roles []string, score float64) error {
+func (c *ContinueCase) issueCode(ctx context.Context, sess *entities.OAuthSession, userID string, roles []string, score float64, signals map[string]entities.Signal) error {
 	code, err := generateCode()
 	if err != nil {
 		return err
@@ -86,6 +85,7 @@ func (c *ContinueCase) issueCode(ctx context.Context, sess *entities.OAuthSessio
 		UserID:        userID,
 		Roles:         roles,
 		TrustScore:    score,
+		LoginSignals:  signals,
 		CodeChallenge: sess.CodeChallenge,
 	}
 	if err := c.authcodes.Save(ctx, authCode, authcodeTTL); err != nil {

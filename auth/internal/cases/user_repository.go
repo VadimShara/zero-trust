@@ -12,4 +12,6 @@ type UserRepository interface {
 	CreateIDPLink(ctx context.Context, link *entities.UserIDPLink) error
 	GetTOTPSecret(ctx context.Context, userID string) (string, error)
 	SetTOTPSecret(ctx context.Context, userID, secret string) error
+	IsTOTPEnrolled(ctx context.Context, userID string) (bool, error)
+	SetTOTPEnrolled(ctx context.Context, userID string) error
 }

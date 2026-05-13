@@ -9,8 +9,8 @@ import (
 type QueryFilter struct {
 	UserID    string
 	EventType string
-	From      string // ISO8601
-	To        string // ISO8601
+	From      string
+	To        string
 	Limit     int
 	Offset    int
 }

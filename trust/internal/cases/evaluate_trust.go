@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
+	trustcfg "github.com/zero-trust/zero-trust-auth/trust/config"
 	"github.com/zero-trust/zero-trust-auth/trust/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
-// EvaluateTrustInput is the decoded request body for POST /trust/evaluate.
 type EvaluateTrustInput struct {
 	UserID      uuid.UUID
 	Roles       []string
@@ -19,8 +19,7 @@ type EvaluateTrustInput struct {
 	UserAgent   string
 	Fingerprint string
 	Timestamp   time.Time
-	// Register=true persists new devices. Set only on login flows, never on API introspect.
-	Register bool
+	Register    bool
 }
 
 type EvaluateTrustCase struct {
@@ -30,10 +29,9 @@ type EvaluateTrustCase struct {
 	cache        TrustCache
 	ipRep        IPReputation
 	salt         string
+	cfg          trustcfg.TrustConfig
 }
 
-// workingHoursGetter is a minimal interface so EvaluateTrustCase doesn't
-// import the postgres adapter directly.
 type workingHoursGetter interface {
 	Get(ctx context.Context, userID uuid.UUID) (start, end int, err error)
 }
@@ -45,6 +43,7 @@ func NewEvaluateTrustCase(
 	cache TrustCache,
 	ipRep IPReputation,
 	salt string,
+	cfg trustcfg.TrustConfig,
 ) *EvaluateTrustCase {
 	return &EvaluateTrustCase{
 		devices:      devices,
@@ -53,6 +52,7 @@ func NewEvaluateTrustCase(
 		cache:        cache,
 		ipRep:        ipRep,
 		salt:         salt,
+		cfg:          cfg,
 	}
 }
 
@@ -61,9 +61,6 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	fpHash := hashStr(in.Fingerprint, c.salt)
 	uaHash := hashStr(in.UserAgent, c.salt)
 
-	// ── signal 1: device_known (0.25) ────────────────────────────────────────
-	// No fingerprint → neutral (0.5): client doesn't support TLS fingerprinting.
-	// Known fingerprint → 1.0.  Unknown fingerprint → 0.0 (new/suspicious device).
 	deviceScore := 0.5
 	if in.Fingerprint != "" {
 		known, _ := c.devices.IsKnownDevice(ctx, in.UserID.String(), fpHash)
@@ -71,40 +68,37 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	}
 	knownDevice := deviceScore == 1.0
 
-	// ── signal 2: ip_reputation (0.20) ───────────────────────────────────────
 	var ipCountry, ipASN string
-	ipRepScore := 0.5 // default: unknown/private IP = neutral
+	ipRepScore := c.cfg.IPScore.UnknownScore
 	if in.IP != "" {
 		if info, err := c.ipRep.Lookup(ctx, in.IP); err == nil {
 			switch {
-			case info.IsDatacenter || info.IsTor:
-				ipRepScore = 0.0
+			case info.IsDatacenter:
+				ipRepScore = c.cfg.IPScore.DatacenterScore
+			case info.IsTor:
+				ipRepScore = c.cfg.IPScore.TorScore
 			case info.Type == "residential":
-				ipRepScore = 1.0
-			// "unknown" type: keep 0.5
+				ipRepScore = c.cfg.IPScore.ResidentialScore
+			default:
+				ipRepScore = c.cfg.IPScore.UnknownScore
 			}
 			ipCountry = info.Country
 			ipASN = info.ASN
 		}
 	}
 
-	// ── signal 3: geo_anomaly (0.30) ─────────────────────────────────────────
 	geoScore := c.geoAnomalyScore(ctx, in.UserID, ipCountry, in.Timestamp)
-
-	// ── signal 4: time_of_day (0.15) ─────────────────────────────────────────
 	todScore := c.timeOfDayScore(ctx, in.UserID, in.Timestamp)
 
-	// ── signal 5: velocity (0.10) ────────────────────────────────────────────
-	// Read-only: IncrFails is called only on actual failed login attempts (anonymous_check).
 	fails, _ := c.cache.GetFails(ctx, in.UserID)
-	velScore := velocityScore(fails)
+	velScore := velocityScore(fails, c.cfg.Velocity)
 
 	signals := []entities.RiskSignal{
-		{Name: "device_known", Score: deviceScore, Weight: 0.25},
-		{Name: "ip_reputation", Score: ipRepScore, Weight: 0.20},
-		{Name: "geo_anomaly", Score: geoScore, Weight: 0.30},
-		{Name: "time_of_day", Score: todScore, Weight: 0.15},
-		{Name: "velocity", Score: velScore, Weight: 0.10},
+		{Name: "device_known", Score: deviceScore, Weight: c.cfg.Signals.DeviceKnown.Weight},
+		{Name: "ip_reputation", Score: ipRepScore, Weight: c.cfg.Signals.IPReputation.Weight},
+		{Name: "geo_anomaly", Score: geoScore, Weight: c.cfg.Signals.GeoAnomaly.Weight},
+		{Name: "time_of_day", Score: todScore, Weight: c.cfg.Signals.TimeOfDay.Weight},
+		{Name: "velocity", Score: velScore, Weight: c.cfg.Signals.Velocity.Weight},
 	}
 
 	total := 0.0
@@ -113,9 +107,12 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 	}
 
 	result := &entities.TrustScore{Value: total, Signals: signals}
-	result.Decision = result.Decide()
+	result.Decision = result.Decide(
+		c.cfg.Thresholds.Allow,
+		c.cfg.Thresholds.MFARequired,
+		c.cfg.Thresholds.StepUp,
+	)
 
-	// ── async post-compute saves (don't block response) ───────────────────────
 	go func() {
 		bgCtx := context.Background()
 		if in.Register && !knownDevice && in.Fingerprint != "" {
@@ -147,10 +144,7 @@ func (c *EvaluateTrustCase) Execute(ctx context.Context, in EvaluateTrustInput) 
 func (c *EvaluateTrustCase) geoAnomalyScore(ctx context.Context, userID uuid.UUID, currentCountry string, now time.Time) float64 {
 	lastCtx, err := c.cache.GetLastContext(ctx, userID)
 	if err != nil {
-		if !isNotFound(err) {
-			return 0.5 // cache error: be cautious but not zero
-		}
-		return 0.5 // no history yet
+		return c.cfg.GeoAnomaly.UnknownScore
 	}
 
 	hoursDiff := now.Sub(lastCtx.Timestamp).Hours()
@@ -161,12 +155,12 @@ func (c *EvaluateTrustCase) geoAnomalyScore(ctx context.Context, userID uuid.UUI
 	curr, hasCurr := countryCentroids[currentCountry]
 	last, hasLast := countryCentroids[lastCtx.Country]
 	if !hasCurr || !hasLast {
-		return 0.5 // unknown country — can't determine
+		return c.cfg.GeoAnomaly.UnknownScore
 	}
 
 	dist := haversineKm(curr[0], curr[1], last[0], last[1])
-	if dist/hoursDiff > 900 {
-		return 0.0 // impossible travel
+	if dist/hoursDiff > c.cfg.GeoAnomaly.MaxSpeedKmh {
+		return 0.0
 	}
 	return 1.0
 }
@@ -180,8 +174,6 @@ func (c *EvaluateTrustCase) timeOfDayScore(ctx context.Context, userID uuid.UUID
 	return 0.5
 }
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-
 func boolScore(b bool) float64 {
 	if b {
 		return 1.0
@@ -189,14 +181,14 @@ func boolScore(b bool) float64 {
 	return 0.0
 }
 
-func velocityScore(fails int64) float64 {
+func velocityScore(fails int64, cfg trustcfg.VelocityConfig) float64 {
 	switch {
-	case fails < 3:
-		return 1.0
-	case fails < 10:
-		return 0.5
+	case fails < cfg.LowThreshold:
+		return cfg.LowScore
+	case fails < cfg.HighThreshold:
+		return cfg.MidScore
 	default:
-		return 0.0
+		return cfg.HighScore
 	}
 }
 
@@ -204,7 +196,6 @@ func isNotFound(err error) bool {
 	return err != nil && err.Error() == pkgerrors.ErrNotFound.Error()
 }
 
-// haversineKm returns the great-circle distance in kilometres.
 func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	const R = 6371.0
 	φ1 := lat1 * math.Pi / 180
@@ -216,7 +207,6 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return R * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-// countryCentroids maps ISO 3166-1 alpha-2 → {lat, lon} of country centroid.
 var countryCentroids = map[string][2]float64{
 	"AF": {33.94, 67.71}, "AR": {-38.42, -63.62}, "AU": {-25.27, 133.78},
 	"AT": {47.52, 14.55}, "BE": {50.50, 4.47},    "BR": {-14.24, -51.93},

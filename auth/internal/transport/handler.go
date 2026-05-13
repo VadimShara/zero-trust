@@ -29,16 +29,19 @@ func (h *Handler) mfaSetup(w http.ResponseWriter, r *http.Request) {
 		UserID string `json:"user_id"`
 		Email  string `json:"email"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
 	result, err := h.cases.SetupMFA(r.Context(), req.UserID, req.Email)
 	if err != nil {
 		h.log.Error("mfa setup failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"secret":      result.Secret,
@@ -52,16 +55,19 @@ func (h *Handler) mfaVerify(w http.ResponseWriter, r *http.Request) {
 		UserID string `json:"user_id"`
 		Code   string `json:"code"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" || req.Code == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
 	valid, err := h.cases.VerifyMFA(r.Context(), req.UserID, req.Code)
 	if err != nil {
 		h.log.Error("mfa verify failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"valid": valid})
 }
@@ -72,20 +78,24 @@ func (h *Handler) resolveUser(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 		IDP   string `json:"idp"`
 	}
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+
 	if req.Sub == "" || req.IDP == "" {
 		http.Error(w, "sub and idp are required", http.StatusBadRequest)
 		return
 	}
+
 	userID, created, err := h.cases.ResolveUser(r.Context(), req.IDP, req.Sub, req.Email)
 	if err != nil {
 		h.log.Error("resolve user failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(struct {
 		UserID  uuid.UUID `json:"user_id"`

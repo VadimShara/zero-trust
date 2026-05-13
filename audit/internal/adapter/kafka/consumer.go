@@ -9,8 +9,6 @@ import (
 	"github.com/zero-trust/zero-trust-auth/audit/internal/cases"
 )
 
-// Consumer implements cases.EventConsumer.
-// It creates one kafka.Reader per topic and fans all messages into a single channel.
 type Consumer struct {
 	brokers []string
 	groupID string
@@ -25,9 +23,6 @@ func NewConsumer(brokers []string, groupID string) *Consumer {
 	return &Consumer{brokers: brokers, groupID: groupID}
 }
 
-// Subscribe starts one goroutine per topic. Messages are fanned into the returned
-// channel. The channel is closed when all goroutines have exited (context cancelled
-// or Close called).
 func (c *Consumer) Subscribe(ctx context.Context, topics []string) (<-chan cases.Message, error) {
 	ch := make(chan cases.Message, 256)
 
@@ -37,7 +32,7 @@ func (c *Consumer) Subscribe(ctx context.Context, topics []string) (<-chan cases
 			Brokers:  c.brokers,
 			Topic:    topic,
 			GroupID:  c.groupID,
-			MaxBytes: 10 << 20, // 10 MiB
+			MaxBytes: 10 << 20,
 		})
 		c.mu.Lock()
 		c.readers = append(c.readers, r)
@@ -49,7 +44,6 @@ func (c *Consumer) Subscribe(ctx context.Context, topics []string) (<-chan cases
 			for {
 				msg, err := reader.ReadMessage(ctx)
 				if err != nil {
-					// context cancelled or reader closed — normal shutdown
 					return
 				}
 				select {
@@ -61,7 +55,6 @@ func (c *Consumer) Subscribe(ctx context.Context, topics []string) (<-chan cases
 		}(r)
 	}
 
-	// Close channel once all readers have exited so range-loops terminate.
 	go func() {
 		wg.Wait()
 		close(ch)
@@ -70,7 +63,6 @@ func (c *Consumer) Subscribe(ctx context.Context, topics []string) (<-chan cases
 	return ch, nil
 }
 
-// Close closes all underlying Kafka readers, unblocking any in-flight ReadMessage calls.
 func (c *Consumer) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -9,26 +9,33 @@ import (
 	"github.com/google/uuid"
 )
 
-type AccessToken struct {
-	Raw        string    // random hex — returned to client, never persisted
-	Hash       string    // sha256(Raw) — used as Redis key suffix
-	UserID     uuid.UUID
-	Roles      []string
-	TrustScore float64
-	FamilyID   uuid.UUID
-	Exp        int64 // unix timestamp
+type Signal struct {
+	Score  float64 `json:"score"`
+	Weight float64 `json:"weight"`
 }
 
-func NewAccessToken(userID uuid.UUID, roles []string, trustScore float64, familyID uuid.UUID, ttl time.Duration) *AccessToken {
+type AccessToken struct {
+	Raw          string
+	Hash         string
+	UserID       uuid.UUID
+	Roles        []string
+	TrustScore   float64
+	LoginSignals map[string]Signal
+	FamilyID     uuid.UUID
+	Exp          int64
+}
+
+func NewAccessToken(userID uuid.UUID, roles []string, trustScore float64, loginSignals map[string]Signal, familyID uuid.UUID, ttl time.Duration) *AccessToken {
 	raw := genRaw()
 	return &AccessToken{
-		Raw:        raw,
-		Hash:       hashHex(raw),
-		UserID:     userID,
-		Roles:      roles,
-		TrustScore: trustScore,
-		FamilyID:   familyID,
-		Exp:        time.Now().Add(ttl).Unix(),
+		Raw:          raw,
+		Hash:         hashHex(raw),
+		UserID:       userID,
+		Roles:        roles,
+		TrustScore:   trustScore,
+		LoginSignals: loginSignals,
+		FamilyID:     familyID,
+		Exp:          time.Now().Add(ttl).Unix(),
 	}
 }
 

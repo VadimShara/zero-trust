@@ -8,28 +8,36 @@ import (
 	"github.com/google/uuid"
 )
 
-const failTTL = 15 * time.Minute // sliding window per Redis key schema
-
-// key: trust:fails:{userID}  TTL 15m  — per-user fail counter
 func (c *TrustCache) GetFails(ctx context.Context, userID uuid.UUID) (int64, error) {
 	val, err := c.client.Get(ctx, fmt.Sprintf("trust:fails:%s", userID)).Int64()
 	if err != nil {
-		return 0, nil // key missing = no fails
+		return 0, nil
 	}
 	return val, nil
 }
 
 func (c *TrustCache) IncrFails(ctx context.Context, userID uuid.UUID) (int64, error) {
-	return c.incrWithTTL(ctx, fmt.Sprintf("trust:fails:%s", userID), failTTL)
+	return c.incrWithTTL(ctx, fmt.Sprintf("trust:fails:%s", userID), c.failTTL)
 }
 
 func (c *TrustCache) ResetFails(ctx context.Context, userID uuid.UUID) error {
 	return c.client.Del(ctx, fmt.Sprintf("trust:fails:%s", userID)).Err()
 }
 
-// key: trust:fails:ip:{ipHash}  TTL 15m  — per-IP anonymous check counter
+func (c *TrustCache) SetFails(ctx context.Context, userID uuid.UUID, count int64, ttl time.Duration) error {
+	return c.client.Set(ctx, fmt.Sprintf("trust:fails:%s", userID), count, ttl).Err()
+}
+
+func (c *TrustCache) GetIPFails(ctx context.Context, ipHash string) (int64, error) {
+	val, err := c.client.Get(ctx, fmt.Sprintf("trust:fails:ip:%s", ipHash)).Int64()
+	if err != nil {
+		return 0, nil
+	}
+	return val, nil
+}
+
 func (c *TrustCache) IncrIPFails(ctx context.Context, ipHash string) (int64, error) {
-	return c.incrWithTTL(ctx, fmt.Sprintf("trust:fails:ip:%s", ipHash), failTTL)
+	return c.incrWithTTL(ctx, fmt.Sprintf("trust:fails:ip:%s", ipHash), c.ipFailTTL)
 }
 
 func (c *TrustCache) incrWithTTL(ctx context.Context, key string, ttl time.Duration) (int64, error) {

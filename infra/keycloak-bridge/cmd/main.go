@@ -16,10 +16,9 @@ import (
 	kfk "github.com/segmentio/kafka-go"
 )
 
-// keycloakEvent matches the JSON published by the Keycloak SPI Kafka listener.
 type keycloakEvent struct {
 	Type      string `json:"type"`
-	Time      int64  `json:"time"` // epoch milliseconds
+	Time      int64  `json:"time"`
 	UserID    string `json:"userId"`
 	ClientID  string `json:"clientId"`
 	Error     string `json:"error"`
@@ -40,9 +39,7 @@ func main() {
 		GroupID:        "keycloak-bridge",
 		MaxBytes:       1 << 20,
 		CommitInterval: time.Second,
-		// Start from the earliest offset to process all existing events.
-		// keycloak-bridge is idempotent: IncrFails/ResetFails are safe to re-apply.
-		StartOffset: kfk.FirstOffset,
+		StartOffset:    kfk.LastOffset,
 	})
 	defer reader.Close()
 
@@ -70,7 +67,6 @@ func main() {
 		}
 
 		if ev.UserID == "" {
-			// LOGIN_ERROR for non-existent username — no user to attribute to.
 			continue
 		}
 
@@ -87,13 +83,6 @@ func main() {
 			} else {
 				log.Info("LOGIN_ERROR: fails incremented",
 					"user_id", userID, "kc_error", ev.Error, "ip", ev.IPAddress)
-			}
-
-		case "LOGIN":
-			if err := callTrust(ctx, httpClient, trustURL+"/trust/fails/reset", userID); err != nil {
-				log.Error("reset fails", "user_id", userID, "error", err)
-			} else {
-				log.Info("LOGIN: fails reset", "user_id", userID)
 			}
 		}
 	}

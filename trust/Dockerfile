@@ -11,4 +11,5 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /bin/service /bin/service
 COPY trust/migrations /app/migrations
+COPY trust/config/config.yaml /app/config.yaml
 ENTRYPOINT ["/bin/service"]

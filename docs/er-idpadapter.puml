@@ -1,0 +1,28 @@
+@startuml er-idpadapter
+title ER-диаграмма: idpadapter (Redis)
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam entityBackgroundColor #FFFDE7
+
+note as N1
+  Сервис использует только Redis.
+  Реляционной БД нет.
+  Хранит только PKCE-верификаторы
+  на время OAuth2-флоу.
+end note
+
+entity "PKCEEntry\n[key: pkce:{state}]" as pkce {
+  * state    : string <<key>>
+  --
+  * verifier : string
+    ttl      : Duration
+}
+
+note right of pkce
+  Запись удаляется после
+  однократного чтения (Get + Delete)
+  или по истечении TTL
+end note
+
+@enduml

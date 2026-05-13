@@ -22,8 +22,6 @@ func New(addr string, handler http.Handler) *Server {
 	}
 }
 
-// Run starts the HTTP server and blocks until ctx is cancelled, then shuts
-// down gracefully with a 5-second deadline.
 func (s *Server) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {

@@ -26,25 +26,22 @@ func NewExchangeCodeCase(authcodes AuthCodeStore, tokens TokenService, clientSec
 }
 
 func (c *ExchangeCodeCase) Execute(ctx context.Context, code, codeVerifier, clientSecret string) (*TokenResponse, error) {
-	// Atomic get+delete — code becomes invalid after this call.
 	authCode, err := c.authcodes.GetAndDelete(ctx, code)
 	if err != nil {
 		return nil, pkgerrors.ErrNotFound
 	}
 
-	// Verify client secret.
 	if clientSecret != c.clientSecret {
 		return nil, pkgerrors.ErrUnauthorized
 	}
 
-	// Verify PKCE: BASE64URL(SHA256(code_verifier)) must equal stored code_challenge.
 	h := sha256.Sum256([]byte(codeVerifier))
 	computed := base64.RawURLEncoding.EncodeToString(h[:])
 	if computed != authCode.CodeChallenge {
 		return nil, pkgerrors.ErrInvalidPKCE
 	}
 
-	accessToken, refreshToken, err := c.tokens.Issue(ctx, authCode.UserID, authCode.Roles, authCode.TrustScore)
+	accessToken, refreshToken, err := c.tokens.Issue(ctx, authCode.UserID, authCode.Roles, authCode.TrustScore, authCode.LoginSignals)
 	if err != nil {
 		return nil, err
 	}
@@ -53,6 +50,6 @@ func (c *ExchangeCodeCase) Execute(ctx context.Context, code, codeVerifier, clie
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		TokenType:    "Bearer",
-		ExpiresIn:    900, // 15 minutes in seconds
+		ExpiresIn:    900,
 	}, nil
 }

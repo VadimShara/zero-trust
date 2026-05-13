@@ -1,0 +1,27 @@
+@startuml er-audit
+title ER-диаграмма: audit
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+entity "audit_log" as audit_log {
+  * id : UUID <<PK>> <<gen_random_uuid()>>
+  --
+  * event_type : TEXT
+    user_id     : UUID <<nullable>>
+  * payload     : JSONB
+  * created_at  : TIMESTAMPTZ <<DEFAULT now()>>
+}
+
+note right of audit_log
+  Индексы:
+  · idx_audit_log_user_id
+  · idx_audit_log_event_type
+  · idx_audit_log_created_at DESC
+
+  user_id — внешняя ссылка на
+  сервис auth (не FK на уровне БД,
+  сервисы изолированы)
+end note
+
+@enduml

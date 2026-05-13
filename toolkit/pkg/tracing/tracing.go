@@ -11,10 +11,6 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 )
 
-// InitTracer configures the global OpenTelemetry tracer provider with an OTLP
-// HTTP exporter. If OTEL_ENDPOINT is not set the function is a no-op and
-// returns a no-op shutdown func. The caller must invoke the returned func on
-// service shutdown.
 func InitTracer(serviceName string) (func(), error) {
 	endpoint := os.Getenv("OTEL_ENDPOINT")
 	if endpoint == "" {

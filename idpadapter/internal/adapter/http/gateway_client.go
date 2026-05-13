@@ -11,8 +11,6 @@ import (
 	"github.com/zero-trust/zero-trust-auth/idpadapter/internal/cases"
 )
 
-// GatewayClient calls the Gateway's private port (:8081) after identity resolution.
-// user_id travels only on this internal network call — never in a browser URL.
 type GatewayClient struct {
 	privateURL string
 	httpClient *http.Client

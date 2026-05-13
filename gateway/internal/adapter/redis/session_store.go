@@ -9,13 +9,11 @@ import (
 
 	rdb "github.com/redis/go-redis/v9"
 
-	"github.com/zero-trust/zero-trust-auth/gateway/internal/entities"
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/gateway/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
-// SessionStore persists OAuth sessions keyed by state.
-// Redis key: session:{state}  TTL 10m
 type SessionStore struct {
 	client *rdb.Client
 }
@@ -31,6 +29,7 @@ func (s *SessionStore) Save(ctx context.Context, sess *entities.OAuthSession, tt
 	if err != nil {
 		return err
 	}
+
 	return s.client.Set(ctx, sessionKey(sess.State), data, ttl).Err()
 }
 
@@ -42,10 +41,12 @@ func (s *SessionStore) Get(ctx context.Context, state string) (*entities.OAuthSe
 		}
 		return nil, err
 	}
+
 	var sess entities.OAuthSession
 	if err := json.Unmarshal([]byte(val), &sess); err != nil {
 		return nil, err
 	}
+
 	return &sess, nil
 }
 

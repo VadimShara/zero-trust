@@ -12,22 +12,21 @@ import (
 const sessionTTL = 10 * time.Minute
 
 type AuthorizeCase struct {
-	sessions  SessionStore
-	trust     TrustService
-	idp       IDPAdapterService
-	clientID  string // expected CLIENT_ID env value
+	sessions SessionStore
+	trust    TrustService
+	idp      IDPAdapterService
+	clientID string
 }
 
 func NewAuthorizeCase(sessions SessionStore, trust TrustService, idp IDPAdapterService, clientID string) *AuthorizeCase {
 	return &AuthorizeCase{sessions: sessions, trust: trust, idp: idp, clientID: clientID}
 }
 
-// Execute validates the authorize request, stores the session, runs the anonymous
-// trust check, and returns the Keycloak login URL to redirect the browser to.
 func (c *AuthorizeCase) Execute(ctx context.Context, clientID, codeChallenge, method, state string, rc RequestCtx) (loginURL string, err error) {
 	if clientID != c.clientID {
 		return "", pkgerrors.ErrUnauthorized
 	}
+
 	if method != "S256" {
 		return "", errors.New("only S256 code_challenge_method is supported")
 	}
@@ -47,7 +46,7 @@ func (c *AuthorizeCase) Execute(ctx context.Context, clientID, codeChallenge, me
 
 	allow, err := c.trust.AnonymousCheck(ctx, rc)
 	if err != nil || !allow {
-		_ = c.sessions.Delete(ctx, state) // cleanup on deny
+		_ = c.sessions.Delete(ctx, state)
 		return "", pkgerrors.ErrUnauthorized
 	}
 

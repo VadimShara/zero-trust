@@ -19,14 +19,11 @@ func NewCallbackCase(sessions SessionStore, authcodes AuthCodeStore, clientCallb
 	return &CallbackCase{sessions: sessions, authcodes: authcodes, clientCallbackURL: clientCallbackURL}
 }
 
-// CallbackResult tells the handler which action to take.
 type CallbackResult struct {
-	MFARequired bool   // true → redirect to /mfa?state=
-	RedirectURL string // set when MFARequired is false
+	MFARequired bool
+	RedirectURL string
 }
 
-// Execute inspects session state and returns what to do next.
-// If MFA is pending, the browser must visit /mfa before getting the code.
 func (c *CallbackCase) Execute(ctx context.Context, gatewayPublicURL, state string) (*CallbackResult, error) {
 	sess, err := c.sessions.Get(ctx, state)
 	if err != nil {
@@ -44,6 +41,7 @@ func (c *CallbackCase) Execute(ctx context.Context, gatewayPublicURL, state stri
 	if err != nil {
 		return nil, pkgerrors.ErrNotFound
 	}
+
 	return &CallbackResult{
 		RedirectURL: fmt.Sprintf("%s?code=%s&state=%s", c.clientCallbackURL, code, state),
 	}, nil

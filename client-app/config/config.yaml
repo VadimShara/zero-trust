@@ -1,0 +1,10 @@
+server:
+  port: "4000"
+
+gateway:
+  url: "${GATEWAY_URL}"
+  public_url: "${GATEWAY_PUBLIC_URL}"
+
+client:
+  id: "${CLIENT_ID}"
+  secret: "${CLIENT_SECRET}"

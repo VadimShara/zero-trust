@@ -19,19 +19,14 @@ import (
 	httpadapter "github.com/zero-trust/zero-trust-auth/gateway/internal/adapter/http"
 	redisadapter "github.com/zero-trust/zero-trust-auth/gateway/internal/adapter/redis"
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
-	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
-
-// ── helpers ──────────────────────────────────────────────────────────────────
 
 func testWriteJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// noFollow is an http.Client that never follows redirects — it returns
-// the redirect response so the test can inspect the Location header.
 var noFollow = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
@@ -67,20 +62,15 @@ func testBearerToken(r *http.Request) string {
 	return strings.TrimPrefix(auth, "Bearer ")
 }
 
-// ── mock servers ──────────────────────────────────────────────────────────────
-
 func mockKeycloak(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/realms/demo/protocol/openid-connect/auth":
-			// Browser would be redirected here; test never follows this redirect.
 			fmt.Fprintf(w, "keycloak login form")
 		case "/realms/demo/protocol/openid-connect/token":
-			// IDPAdapter would call this; not exercised since IDPAdapter is mocked.
 			testWriteJSON(w, map[string]string{"id_token": "fake.jwt.token"})
 		case "/realms/demo/protocol/openid-connect/certs":
-			// JWKS endpoint — not called directly by gateway.
 			testWriteJSON(w, map[string]any{"keys": []any{}})
 		default:
 			http.NotFound(w, r)
@@ -140,8 +130,6 @@ func mockToken(t *testing.T) *httptest.Server {
 func mockAuth(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Gateway does not call Auth Service directly; IDPAdapter does.
-		// Included per spec; serves as safety net.
 		if r.URL.Path == "/auth/resolve-user" {
 			testWriteJSON(w, map[string]any{"user_id": "usr-123", "created": false})
 			return
@@ -150,8 +138,6 @@ func mockAuth(t *testing.T) *httptest.Server {
 	}))
 }
 
-// mockIDPAdapter returns a loginURL pointing at the mock Keycloak.
-// It does NOT call /internal/continue — the test drives Step 2 directly.
 func mockIDPAdapter(t *testing.T, keycloakURL string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +151,6 @@ func mockIDPAdapter(t *testing.T, keycloakURL string) *httptest.Server {
 	}))
 }
 
-// mockOPA returns allow=true for every resource except "secrets".
 func mockOPA(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,10 +169,7 @@ func mockOPA(t *testing.T) *httptest.Server {
 	}))
 }
 
-// ── test ──────────────────────────────────────────────────────────────────────
-
 func TestFullLoginFlow(t *testing.T) {
-	// ── 1. Start mock servers ─────────────────────────────────────────────────
 	keycloak := mockKeycloak(t)
 	defer keycloak.Close()
 
@@ -206,7 +188,6 @@ func TestFullLoginFlow(t *testing.T) {
 	opa := mockOPA(t)
 	defer opa.Close()
 
-	// ── 2. In-memory Redis (miniredis) ────────────────────────────────────────
 	mini, err := miniredis.Run()
 	if err != nil {
 		t.Fatalf("miniredis: %v", err)
@@ -216,7 +197,6 @@ func TestFullLoginFlow(t *testing.T) {
 	redisClient := rdb.NewClient(&rdb.Options{Addr: mini.Addr()})
 	defer redisClient.Close()
 
-	// ── 3. Wire gateway adapters + cases ──────────────────────────────────────
 	sessions := redisadapter.NewSessionStore(redisClient)
 	authcodes := redisadapter.NewAuthCodeStore(redisClient)
 	trustSvc := httpadapter.NewTrustClient(trust.URL)
@@ -232,14 +212,11 @@ func TestFullLoginFlow(t *testing.T) {
 
 	authorizeCase := cases.NewAuthorizeCase(sessions, trustSvc, idpSvc, clientID)
 	continueCase := cases.NewContinueCase(sessions, authcodes, trustSvc)
-	callbackCase := cases.NewCallbackCase(authcodes, clientCallbackURL)
+	callbackCase := cases.NewCallbackCase(sessions, authcodes, clientCallbackURL)
 	exchangeCase := cases.NewExchangeCodeCase(authcodes, tokenSvc, clientSecret)
 	refreshCase := cases.NewRefreshCase(tokenSvc)
 	logoutCase := cases.NewLogoutCase(tokenSvc)
 
-	// ── 4. Build HTTP muxes ───────────────────────────────────────────────────
-
-	// API auth middleware (mirrors cmd/main.go logic)
 	apiAuth := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			tkn := testBearerToken(r)
@@ -247,14 +224,18 @@ func TestFullLoginFlow(t *testing.T) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			active, userID, roles, score, err := tokenSvc.Introspect(r.Context(), tkn)
+			active, userID, roles, score, _, err := tokenSvc.Introspect(r.Context(), tkn, cases.RequestCtx{
+				IP:          r.Header.Get("X-Real-IP"),
+				UserAgent:   r.Header.Get("User-Agent"),
+				Fingerprint: r.Header.Get("X-TLS-Fingerprint"),
+			})
 			if err != nil || !active {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			allowed, err := opaEngine.Allow(r.Context(), userID, roles, score,
+			decision, err := opaEngine.Decide(r.Context(), userID, roles, score,
 				testExtractResource(r.URL.Path), testMethodToAction(r.Method))
-			if err != nil || !allowed {
+			if err != nil || decision == nil || !decision.Allow {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
@@ -286,12 +267,12 @@ func TestFullLoginFlow(t *testing.T) {
 
 	pub.HandleFunc("GET /callback", func(w http.ResponseWriter, r *http.Request) {
 		state := r.URL.Query().Get("state")
-		redirectURL, err := callbackCase.Execute(r.Context(), state)
+		result, err := callbackCase.Execute(r.Context(), "http://localhost:3000", state)
 		if err != nil {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Redirect(w, r, redirectURL, http.StatusFound)
+		http.Redirect(w, r, result.RedirectURL, http.StatusFound)
 	})
 
 	pub.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
@@ -386,16 +367,11 @@ func TestFullLoginFlow(t *testing.T) {
 	t.Logf("gateway public:  %s", pubSrv.URL)
 	t.Logf("gateway private: %s", privSrv.URL)
 
-	// ── 5. PKCE pair ──────────────────────────────────────────────────────────
-	// Use a fixed verifier so the test is deterministic.
 	codeVerifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	h := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(h[:])
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 1 — GET /authorize → 302 to Keycloak loginURL
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 1: GET /authorize ───")
+	t.Log("Step 1: GET /authorize")
 	authorizeURL := fmt.Sprintf(
 		"%s/authorize?client_id=%s&code_challenge=%s&code_challenge_method=S256&state=test-state&response_type=code",
 		pubSrv.URL, clientID, url.QueryEscape(codeChallenge),
@@ -415,10 +391,7 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Logf("Step 1 OK → redirect to %s", loc1)
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 2 — POST /internal/continue (IDPAdapter callback simulation)
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 2: POST /internal/continue ───")
+	t.Log("Step 2: POST /internal/continue")
 	continueBody, _ := json.Marshal(map[string]any{
 		"state":   "test-state",
 		"user_id": "usr-123",
@@ -437,10 +410,7 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Log("Step 2 OK → own_code generated and stored")
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 3 — GET /callback?state=test-state → 302 to client with own_code
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 3: GET /callback?state=test-state ───")
+	t.Log("Step 3: GET /callback?state=test-state")
 	resp, err = noFollow.Get(pubSrv.URL + "/callback?state=test-state")
 	if err != nil {
 		t.Fatalf("Step 3 request failed: %v", err)
@@ -464,10 +434,7 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Logf("Step 3 OK → own_code=%s…%s state=test-state", ownCode[:4], ownCode[len(ownCode)-4:])
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 4 — POST /token (authorization_code grant) → tokens
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 4: POST /token (authorization_code) ───")
+	t.Log("Step 4: POST /token (authorization_code)")
 	tokenForm := url.Values{}
 	tokenForm.Set("grant_type", "authorization_code")
 	tokenForm.Set("code", ownCode)
@@ -499,10 +466,7 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Logf("Step 4 OK → access_token=%v expires_in=%v", tokenResp["access_token"], tokenResp["expires_in"])
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 5 — GET /api/projects → 200 (OPA allows developers on projects)
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 5: GET /api/projects (expect 200) ───")
+	t.Log("Step 5: GET /api/projects (expect 200)")
 	req5, _ := http.NewRequest(http.MethodGet, pubSrv.URL+"/api/projects", nil)
 	req5.Header.Set("Authorization", "Bearer opaque-access")
 	resp5, err := http.DefaultClient.Do(req5)
@@ -515,10 +479,7 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Log("Step 5 OK → /api/projects allowed by OPA")
 
-	// ─────────────────────────────────────────────────────────────────────────
-	// Step 6 — GET /api/secrets → 403 (OPA denies secrets in this mock)
-	// ─────────────────────────────────────────────────────────────────────────
-	t.Log("─── Step 6: GET /api/secrets (expect 403) ───")
+	t.Log("Step 6: GET /api/secrets (expect 403)")
 	req6, _ := http.NewRequest(http.MethodGet, pubSrv.URL+"/api/secrets", nil)
 	req6.Header.Set("Authorization", "Bearer opaque-access")
 	resp6, err := http.DefaultClient.Do(req6)
@@ -531,5 +492,5 @@ func TestFullLoginFlow(t *testing.T) {
 	}
 	t.Log("Step 6 OK → /api/secrets denied by OPA")
 
-	t.Log("═══ All 6 steps passed ═══")
+	t.Log("All 6 steps passed")
 }

@@ -1,0 +1,17 @@
+server:
+  addr: ":8080"
+
+redis:
+  url: "${REDIS_URL}"
+
+keycloak:
+  issuer: "${KEYCLOAK_ISSUER}"
+  client_id: "${KEYCLOAK_CLIENT_ID}"
+  client_secret: "${KEYCLOAK_CLIENT_SECRET}"
+  public_url: "${KEYCLOAK_PUBLIC_URL}"
+  callback_url: "${IDPADAPTER_CALLBACK_URL}"
+
+services:
+  gateway_private: "${GATEWAY_PRIVATE_URL}"
+  gateway_public: "${GATEWAY_PUBLIC_URL}"
+  auth: "${AUTH_SERVICE_URL}"

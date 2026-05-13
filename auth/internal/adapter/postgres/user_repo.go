@@ -7,8 +7,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/zero-trust/zero-trust-auth/auth/internal/entities"
 	"github.com/zero-trust/zero-trust-auth/auth/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/auth/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
@@ -16,7 +16,6 @@ type UserRepo struct {
 	db *pgxpool.Pool
 }
 
-// compile-time interface check
 var _ cases.UserRepository = (*UserRepo)(nil)
 
 func NewUserRepo(db *pgxpool.Pool) *UserRepo {
@@ -31,6 +30,7 @@ func (r *UserRepo) FindByIDPSub(ctx context.Context, idp, sub string) (*entities
 		WHERE l.idp = $1 AND l.sub = $2`
 
 	var u entities.User
+
 	err := r.db.QueryRow(ctx, q, idp, sub).Scan(&u.ID, &u.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -38,11 +38,13 @@ func (r *UserRepo) FindByIDPSub(ctx context.Context, idp, sub string) (*entities
 		}
 		return nil, err
 	}
+
 	return &u, nil
 }
 
 func (r *UserRepo) CreateUser(ctx context.Context, u *entities.User) error {
 	const q = `INSERT INTO users (id, created_at) VALUES ($1, $2)`
+
 	_, err := r.db.Exec(ctx, q, u.ID, u.CreatedAt)
 	return err
 }
@@ -52,11 +54,13 @@ func (r *UserRepo) CreateIDPLink(ctx context.Context, link *entities.UserIDPLink
 		INSERT INTO user_idp_links (user_id, idp, sub, email, created_at)
 		VALUES ($1, $2, $3, $4, $5)`
 	_, err := r.db.Exec(ctx, q, link.UserID, link.IDP, link.Sub, link.Email, link.CreatedAt)
+
 	return err
 }
 
 func (r *UserRepo) GetTOTPSecret(ctx context.Context, userID string) (string, error) {
 	var secret *string
+
 	err := r.db.QueryRow(ctx, `SELECT totp_secret FROM users WHERE id = $1`, userID).Scan(&secret)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -64,13 +68,32 @@ func (r *UserRepo) GetTOTPSecret(ctx context.Context, userID string) (string, er
 		}
 		return "", err
 	}
+
 	if secret == nil || *secret == "" {
 		return "", pkgerrors.ErrNotFound
 	}
+
 	return *secret, nil
 }
 
 func (r *UserRepo) SetTOTPSecret(ctx context.Context, userID, secret string) error {
 	_, err := r.db.Exec(ctx, `UPDATE users SET totp_secret = $1 WHERE id = $2`, secret, userID)
+	return err
+}
+
+func (r *UserRepo) IsTOTPEnrolled(ctx context.Context, userID string) (bool, error) {
+	var enrolled bool
+	err := r.db.QueryRow(ctx, `SELECT totp_enrolled FROM users WHERE id = $1`, userID).Scan(&enrolled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, pkgerrors.ErrNotFound
+		}
+		return false, err
+	}
+	return enrolled, nil
+}
+
+func (r *UserRepo) SetTOTPEnrolled(ctx context.Context, userID string) error {
+	_, err := r.db.Exec(ctx, `UPDATE users SET totp_enrolled = TRUE WHERE id = $1`, userID)
 	return err
 }

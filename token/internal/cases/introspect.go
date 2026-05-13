@@ -6,15 +6,17 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/zero-trust/zero-trust-auth/token/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
 type IntrospectResult struct {
 	Active       bool
-	ForcedLogout bool // true when session was terminated due to DENY trust decision
+	ForcedLogout bool
 	UserID       uuid.UUID
 	Roles        []string
 	TrustScore   float64
+	LoginSignals map[string]entities.Signal
 	Exp          int64
 }
 
@@ -48,22 +50,18 @@ func (c *IntrospectCase) Execute(ctx context.Context, rawToken string, tc TrustC
 		return &IntrospectResult{Active: false}, nil
 	}
 
-	// Reject access tokens whose family was revoked (reuse attack or forced logout).
 	if revoked, err := c.family.IsRevoked(ctx, at.FamilyID); err != nil || revoked {
 		return &IntrospectResult{Active: false}, nil
 	}
 
-	// Re-evaluate trust on every introspect — Zero Trust core mechanism.
 	tc.UserID = at.UserID
 	newScore, decision, err := c.trust.Evaluate(ctx, tc)
 	if err == nil {
 		at.TrustScore = newScore
 		if remaining := time.Until(time.Unix(at.Exp, 0)); remaining > 0 {
-			_ = c.access.Save(ctx, rawToken, at, remaining) // best-effort
+			_ = c.access.Save(ctx, rawToken, at, remaining)
 		}
 
-		// DENY means a critical trust signal fired (Tor, datacenter IP + many fails, etc.).
-		// Force-logout: revoke the entire token family immediately.
 		if decision == "DENY" {
 			_ = c.access.Delete(ctx, rawToken)
 			_ = c.refresh.RevokeFamily(ctx, at.FamilyID)
@@ -81,11 +79,12 @@ func (c *IntrospectCase) Execute(ctx context.Context, rawToken string, tc TrustC
 	}
 
 	return &IntrospectResult{
-		Active:     true,
-		UserID:     at.UserID,
-		Roles:      at.Roles,
-		TrustScore: at.TrustScore,
-		Exp:        at.Exp,
+		Active:       true,
+		UserID:       at.UserID,
+		Roles:        at.Roles,
+		TrustScore:   at.TrustScore,
+		LoginSignals: at.LoginSignals,
+		Exp:          at.Exp,
 	}, nil
 }
 

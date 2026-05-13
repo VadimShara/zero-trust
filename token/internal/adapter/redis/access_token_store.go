@@ -26,7 +26,6 @@ func NewAccessTokenStore(client *rdb.Client) *AccessTokenStore {
 	return &AccessTokenStore{client: client}
 }
 
-// key: token:access:{sha256(raw)}  TTL 15m
 func (s *AccessTokenStore) Save(ctx context.Context, raw string, t *entities.AccessToken, ttl time.Duration) error {
 	data, err := json.Marshal(t)
 	if err != nil {
@@ -52,6 +51,21 @@ func (s *AccessTokenStore) Get(ctx context.Context, raw string) (*entities.Acces
 
 func (s *AccessTokenStore) Delete(ctx context.Context, raw string) error {
 	return s.client.Del(ctx, accessKey(raw)).Err()
+}
+
+func (s *AccessTokenStore) GetByHash(ctx context.Context, hash string) (*entities.AccessToken, error) {
+	val, err := s.client.Get(ctx, fmt.Sprintf("token:access:%s", hash)).Result()
+	if err != nil {
+		if errors.Is(err, rdb.Nil) {
+			return nil, pkgerrors.ErrNotFound
+		}
+		return nil, err
+	}
+	var t entities.AccessToken
+	if err := json.Unmarshal([]byte(val), &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 func (s *AccessTokenStore) DeleteByHash(ctx context.Context, hash string) error {

@@ -9,7 +9,7 @@ import (
 type TrustContext struct {
 	UserID          uuid.UUID
 	IPHash          string
-	Country         string // used for geo-anomaly comparison
+	Country         string
 	ASN             string
 	UserAgent       string
 	FingerprintHash string

@@ -10,4 +10,5 @@ FROM docker.io/library/alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /bin/service /bin/service
+COPY token/config/config.yaml /app/config.yaml
 ENTRYPOINT ["/bin/service"]

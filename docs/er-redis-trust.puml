@@ -1,0 +1,65 @@
+@startuml er-redis-trust
+title Trust — Redis Key Schema
+
+skinparam class {
+  BackgroundColor<<STRING>> #DDEEFF
+  BackgroundColor<<SET>>    #DDFFDD
+  BorderColor               #555555
+  ArrowColor                #555555
+}
+
+class "trust:last:{userID}" <<STRING>> {
+  TTL: 30d
+  --
+  UserID          : uuid.UUID
+  IPHash          : string
+  Country         : string
+  ASN             : string
+  UserAgent       : string
+  FingerprintHash : string
+  Timestamp       : time.Time
+}
+
+class "trust:devices:{userID}" <<SET>> {
+  TTL: 90d
+  --
+  members : []string (fingerprint hash)
+}
+
+class "trust:fails:{userID}" <<STRING>> {
+  TTL: 15m (sliding)
+  --
+  value : int64 (счётчик неудачных входов)
+}
+
+class "trust:fails:ip:{ipHash}" <<STRING>> {
+  TTL: 15m (sliding)
+  --
+  value : int64 (анонимный счётчик по IP)
+}
+
+class "trust:ip:{ipHash}" <<STRING>> {
+  TTL: 1h
+  --
+  IsProxy   : bool
+  IsTor     : bool
+  IsHosting : bool
+  Country   : string
+  ASN       : string
+}
+
+"trust:last:{userID}"      --> "trust:devices:{userID}"      : userID (сравнение контекста)
+"trust:fails:{userID}"     -[hidden]-> "trust:last:{userID}"
+"trust:fails:ip:{ipHash}"  --> "trust:ip:{ipHash}"           : ipHash (кэш репутации)
+
+note bottom of "trust:fails:{userID}"
+  IncrFails сбрасывает TTL при каждом
+  инкременте (скользящее окно 15m)
+end note
+
+note bottom of "trust:ip:{ipHash}"
+  Заполняется IPRepCache.Set() из
+  http-адаптера внешнего IP-репутационного сервиса
+end note
+
+@enduml

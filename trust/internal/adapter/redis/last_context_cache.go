@@ -10,24 +10,23 @@ import (
 	"github.com/google/uuid"
 	rdb "github.com/redis/go-redis/v9"
 
-	"github.com/zero-trust/zero-trust-auth/trust/internal/entities"
 	"github.com/zero-trust/zero-trust-auth/trust/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/trust/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 )
 
-// TrustCache implements cases.TrustCache. Methods are spread across the four
-// Redis adapter files — all in the same package.
 type TrustCache struct {
-	client *rdb.Client
+	client    *rdb.Client
+	failTTL   time.Duration
+	ipFailTTL time.Duration
 }
 
 var _ cases.TrustCache = (*TrustCache)(nil)
 
-func NewTrustCache(client *rdb.Client) *TrustCache {
-	return &TrustCache{client: client}
+func NewTrustCache(client *rdb.Client, failTTL, ipFailTTL time.Duration) *TrustCache {
+	return &TrustCache{client: client, failTTL: failTTL, ipFailTTL: ipFailTTL}
 }
 
-// key: trust:last:{userID}  TTL 30d
 func (c *TrustCache) GetLastContext(ctx context.Context, userID uuid.UUID) (*entities.TrustContext, error) {
 	key := fmt.Sprintf("trust:last:%s", userID)
 	val, err := c.client.Get(ctx, key).Result()

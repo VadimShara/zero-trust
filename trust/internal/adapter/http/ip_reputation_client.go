@@ -22,9 +22,6 @@ type ipCacheStore interface {
 	Set(ctx context.Context, ipHash string, info *cases.IPInfo, ttl time.Duration) error
 }
 
-// IPReputationClient implements cases.IPReputation.
-// Uses ip-api.com (free, no key required) with Redis cache.
-// Falls back gracefully on errors — never blocks the auth flow.
 type IPReputationClient struct {
 	cache      ipCacheStore
 	httpClient *http.Client
@@ -43,7 +40,6 @@ func NewIPReputationClient(cache ipCacheStore, _, _ string, salt string) *IPRepu
 
 func (c *IPReputationClient) Lookup(ctx context.Context, ip string) (*cases.IPInfo, error) {
 	if isPrivateIP(ip) {
-		// Private/loopback addresses carry no reputation signal — return neutral.
 		return &cases.IPInfo{Type: "unknown", Country: ""}, nil
 	}
 
@@ -57,15 +53,15 @@ func (c *IPReputationClient) Lookup(ctx context.Context, ip string) (*cases.IPIn
 
 	info, err := c.callIPAPI(ctx, ip)
 	if err != nil {
-		return &cases.IPInfo{Type: "unknown"}, nil
+		unknown := &cases.IPInfo{Type: "unknown"}
+		_ = c.cache.Set(ctx, ipHash, unknown, 30*time.Second)
+		return unknown, nil
 	}
 
 	_ = c.cache.Set(ctx, ipHash, info, ipRepCacheTTL)
 	return info, nil
 }
 
-// ip-api.com free tier: no key, 45 req/min, HTTP only.
-// Fields: status,country,isp,org,proxy,hosting,query
 type ipAPIResponse struct {
 	Status  string `json:"status"`
 	Country string `json:"countryCode"`
@@ -117,11 +113,10 @@ func (c *IPReputationClient) callIPAPI(ctx context.Context, ip string) (*cases.I
 	return info, nil
 }
 
-// isPrivateIP returns true for loopback, link-local, and RFC-1918 addresses.
 func isPrivateIP(ipStr string) bool {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		return true // unparseable → treat as private
+		return true
 	}
 	private := []string{
 		"127.0.0.0/8",

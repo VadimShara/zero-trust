@@ -11,11 +11,8 @@ import (
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
 )
 
-// OPAClient implements cases.PolicyEngine against Open Policy Agent.
-// Queries /v1/data/authz (the whole package) to get both `allow` and
-// `deny_reason` in a single round-trip — no second request needed.
 type OPAClient struct {
-	endpoint   string // e.g. http://opa:8181/v1/data/authz
+	endpoint   string
 	httpClient *http.Client
 }
 
@@ -36,6 +33,7 @@ func (c *OPAClient) Decide(ctx context.Context, userID string, roles []string, t
 			"action":   action,
 		},
 	}
+
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -57,16 +55,17 @@ func (c *OPAClient) Decide(ctx context.Context, userID string, roles []string, t
 		return nil, fmt.Errorf("opa: status %d", resp.StatusCode)
 	}
 
-	// OPA returns the whole authz package: {result: {allow: bool, deny_reason: string}}
 	var body struct {
 		Result struct {
 			Allow      bool   `json:"allow"`
 			DenyReason string `json:"deny_reason"`
 		} `json:"result"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, err
 	}
+
 	return &cases.PolicyDecision{
 		Allow:      body.Result.Allow,
 		DenyReason: body.Result.DenyReason,

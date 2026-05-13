@@ -1,0 +1,9 @@
+server:
+  addr: ":8080"
+
+postgres:
+  dsn: "${POSTGRES_DSN}"
+  migrations_path: "migrations"
+
+totp:
+  issuer: "ZeroTrustAuth"

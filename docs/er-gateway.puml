@@ -1,0 +1,48 @@
+@startuml er-gateway
+title ER-диаграмма: gateway (Redis)
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam entityBackgroundColor #FFFDE7
+
+note as N1
+  Сервис использует только Redis.
+  Реляционной БД нет.
+  Ключи — строки, значения — JSON (TTL-управляемые).
+end note
+
+entity "OAuthSession\n[key: session:{state}]" as session {
+  * state           : string <<key>>
+  --
+  * code_challenge  : string
+  * client_id       : string
+  * ip              : string
+  * user_agent      : string
+  * fingerprint     : string
+  * created_at      : time.Time
+    mfa_pending     : bool
+    pending_user_id : string
+    pending_roles   : []string
+    pending_trust   : float64
+    pending_email   : string
+}
+
+entity "AuthCode\n[key: authcode:{code}]" as authcode {
+  * code           : string <<key>>
+  --
+  * user_id        : string
+  * roles          : []string
+  * trust_score    : float64
+  * code_challenge : string
+}
+
+entity "StateToCode\n[key: state_code:{state}]" as state2code {
+  * state : string <<key>>
+  --
+  * code  : string
+}
+
+session "1" --> "0..1" state2code : порождает после\nOIDC callback
+state2code "1" --> "1" authcode   : code ссылается на
+
+@enduml

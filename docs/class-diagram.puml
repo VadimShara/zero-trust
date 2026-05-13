@@ -1,0 +1,1002 @@
+@startuml class-diagram
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam classAttributeIconSize 0
+hide empty members
+
+' ============================================================
+' AUDIT
+' ============================================================
+package "audit" #FAFAEE {
+
+  package "audit::entities" {
+    class AuditEvent {
+      +ID: uuid.UUID
+      +EventType: string
+      +UserID: *uuid.UUID
+      +Payload: map[string]any
+      +CreatedAt: time.Time
+    }
+  }
+
+  package "audit::cases" {
+    interface AuditRepository {
+      +Save(ctx, e *AuditEvent) error
+      +Query(ctx, f QueryFilter) ([]*AuditEvent, int, error)
+    }
+    interface EventConsumer {
+      +Subscribe(ctx, topics []string) (<-chan Message, error)
+      +Close() error
+    }
+    class QueryFilter {
+      +UserID: string
+      +EventType: string
+      +From: string
+      +To: string
+      +Limit: int
+      +Offset: int
+    }
+    class Message {
+      +Topic: string
+      +Value: []byte
+    }
+    class HandleEventCase {
+      -repo: AuditRepository
+      +Execute(ctx, msg Message) error
+    }
+    class QueryEventsCase {
+      -repo: AuditRepository
+      +Execute(ctx, f QueryFilter) ([]*AuditEvent, int, error)
+    }
+    class "audit::Cases" as AuditCases {
+      -queryEvents: *QueryEventsCase
+      +QueryEvents(ctx, f QueryFilter) ([]*AuditEvent, int, error)
+    }
+  }
+
+  package "audit::transport" {
+    interface "audit::UseCases" as AuditUseCases {
+      +QueryEvents(ctx, f QueryFilter) ([]*AuditEvent, int, error)
+    }
+    class "audit::Handler" as AuditHandler {
+      -log: *slog.Logger
+      -cases: UseCases
+      +Register(mux *http.ServeMux)
+    }
+  }
+
+  package "audit::adapter/kafka" {
+    class KafkaConsumer {
+      -brokers: []string
+      -groupID: string
+      -mu: sync.Mutex
+      -readers: []*kfk.Reader
+      +Subscribe(ctx, topics []string) (<-chan Message, error)
+      +Close() error
+    }
+  }
+
+  package "audit::adapter/postgres" {
+    class AuditRepo {
+      -db: *pgxpool.Pool
+      +Save(ctx, e *AuditEvent) error
+      +Query(ctx, f QueryFilter) ([]*AuditEvent, int, error)
+    }
+  }
+
+  HandleEventCase --> AuditRepository
+  HandleEventCase ..> Message : <<uses>>
+  QueryEventsCase --> AuditRepository
+  QueryEventsCase ..> QueryFilter : <<uses>>
+  QueryEventsCase ..> AuditEvent : <<returns>>
+  AuditCases *-- QueryEventsCase
+  AuditCases ..> QueryFilter : <<uses>>
+  AuditCases ..> AuditEvent : <<returns>>
+  AuditHandler --> AuditUseCases
+  AuditUseCases ..> QueryFilter : <<uses>>
+  AuditUseCases ..> AuditEvent : <<returns>>
+  AuditCases ..|> AuditUseCases
+  KafkaConsumer ..|> EventConsumer
+  EventConsumer ..> Message : <<produces>>
+  AuditRepo ..|> AuditRepository
+  AuditRepository ..> AuditEvent : <<uses>>
+  AuditRepository ..> QueryFilter : <<uses>>
+}
+
+' ============================================================
+' AUTH
+' ============================================================
+package "auth" #EEF5FA {
+
+  package "auth::entities" {
+    class User {
+      +ID: uuid.UUID
+      +CreatedAt: time.Time
+    }
+    class UserIDPLink {
+      +UserID: uuid.UUID
+      +IDP: string
+      +Sub: string
+      +Email: string
+      +CreatedAt: time.Time
+    }
+  }
+
+  package "auth::cases" {
+    interface UserRepository {
+      +FindByIDPSub(ctx, idp, sub string) (*User, error)
+      +CreateUser(ctx, u *User) error
+      +CreateIDPLink(ctx, link *UserIDPLink) error
+      +GetTOTPSecret(ctx, userID string) (string, error)
+      +SetTOTPSecret(ctx, userID, secret string) error
+    }
+    class SetupResult {
+      +Secret: string
+      +OTPAuthURI: string
+      +Enrolled: bool
+    }
+    class ResolveUserCase {
+      -repo: UserRepository
+      +Execute(ctx, idp, sub, email string) (uuid.UUID, bool, error)
+    }
+    class "auth::MFACase" as AuthMFACase {
+      -users: UserRepository
+      -issuer: string
+      +Setup(ctx, userID, email string) (*SetupResult, error)
+      +Verify(ctx, userID, code string) (bool, error)
+    }
+    class "auth::Cases" as AuthCases {
+      -resolveUser: *ResolveUserCase
+      -mfa: *MFACase
+      +ResolveUser(ctx, idp, sub, email string) (uuid.UUID, bool, error)
+      +SetupMFA(ctx, userID, email string) (*SetupResult, error)
+      +VerifyMFA(ctx, userID, code string) (bool, error)
+    }
+  }
+
+  package "auth::transport" {
+    interface "auth::UseCases" as AuthUseCases {
+      +ResolveUser(ctx, idp, sub, email string) (uuid.UUID, bool, error)
+      +SetupMFA(ctx, userID, email string) (*SetupResult, error)
+      +VerifyMFA(ctx, userID, code string) (bool, error)
+    }
+    class "auth::Handler" as AuthHandler {
+      -log: *slog.Logger
+      -cases: UseCases
+      +Register(mux *http.ServeMux)
+    }
+  }
+
+  package "auth::adapter/postgres" {
+    class UserRepo {
+      -db: *pgxpool.Pool
+      +FindByIDPSub(ctx, idp, sub string) (*User, error)
+      +CreateUser(ctx, u *User) error
+      +CreateIDPLink(ctx, link *UserIDPLink) error
+      +GetTOTPSecret(ctx, userID string) (string, error)
+      +SetTOTPSecret(ctx, userID, secret string) error
+    }
+  }
+
+  ResolveUserCase --> UserRepository
+  AuthMFACase --> UserRepository
+  AuthCases *-- ResolveUserCase
+  AuthCases *-- AuthMFACase
+  AuthHandler --> AuthUseCases
+  AuthCases ..|> AuthUseCases
+  UserRepo ..|> UserRepository
+}
+
+' ============================================================
+' GATEWAY
+' ============================================================
+package "gateway" #EEFAEE {
+
+  package "gateway::entities" {
+    class AuthCode {
+      +Code: string
+      +UserID: string
+      +Roles: []string
+      +TrustScore: float64
+      +CodeChallenge: string
+    }
+    class OAuthSession {
+      +State: string
+      +CodeChallenge: string
+      +ClientID: string
+      +IP: string
+      +UserAgent: string
+      +CreatedAt: time.Time
+      +Fingerprint: string
+      +MFAPending: bool
+      +PendingUserID: string
+      +PendingRoles: []string
+      +PendingTrust: float64
+      +PendingEmail: string
+    }
+  }
+
+  package "gateway::cases" {
+    interface SessionStore {
+      +Save(ctx, s *OAuthSession, ttl Duration) error
+      +Get(ctx, state string) (*OAuthSession, error)
+      +Delete(ctx, state string) error
+    }
+    interface AuthCodeStore {
+      +Save(ctx, a *AuthCode, ttl Duration) error
+      +GetAndDelete(ctx, code string) (*AuthCode, error)
+      +SaveByState(ctx, state, code string, ttl Duration) error
+      +GetByState(ctx, state string) (string, error)
+    }
+    interface TrustService {
+      +AnonymousCheck(ctx, rc RequestCtx) (bool, error)
+      +EvaluateTrust(ctx, userID string, roles []string, rc RequestCtx, register bool) (float64, string, error)
+      +IncrFails(ctx, userID string) error
+      +ResetFails(ctx, userID string) error
+    }
+    interface IDPAdapterService {
+      +GetLoginURL(ctx, state string) (string, error)
+      +GetLogoutURL(ctx, postLogoutRedirectURI string) (string, error)
+    }
+    interface TokenService {
+      +Issue(ctx, userID string, roles []string, trustScore float64) (string, string, error)
+      +Introspect(ctx, token string, rc RequestCtx) (bool, string, []string, float64, error)
+      +Refresh(ctx, refreshToken string, rc RequestCtx) (string, string, error)
+      +Revoke(ctx, token string, revokeAll bool) error
+      +AdminRevokeUser(ctx, userID, adminID, reason string) (int, error)
+    }
+    interface PolicyEngine {
+      +Decide(ctx, userID string, roles []string, trustScore float64, resource, action string) (*PolicyDecision, error)
+    }
+    interface MFAService {
+      +Setup(ctx, userID, email string) (*MFASetup, error)
+      +Verify(ctx, userID, code string) (bool, error)
+    }
+    interface AuditService {
+      +QueryEvents(ctx, params map[string]string) (*AuditQueryResult, error)
+    }
+
+    class RequestCtx {
+      +IP: string
+      +UserAgent: string
+      +Fingerprint: string
+    }
+    class PolicyDecision {
+      +Allow: bool
+      +DenyReason: string
+    }
+    class MFASetup {
+      +Secret: string
+      +OTPAuthURI: string
+      +Enrolled: bool
+    }
+    class TokenResponse {
+      +AccessToken: string
+      +RefreshToken: string
+      +TokenType: string
+      +ExpiresIn: int
+    }
+    class CallbackResult {
+      +MFARequired: bool
+      +RedirectURL: string
+    }
+    class ContinueInput {
+      +State: string
+      +UserID: string
+      +Email: string
+      +Roles: []string
+      +ReqCtx: RequestCtx
+    }
+    class MFASetupResult {
+      +Secret: string
+      +OTPAuthURI: string
+      +Enrolled: bool
+    }
+    class AuditQueryResult {
+      +Events: []AuditEvent
+      +Total: int
+      +Limit: int
+      +Offset: int
+    }
+
+    class AuthorizeCase {
+      -sessions: SessionStore
+      -trust: TrustService
+      -idp: IDPAdapterService
+      -clientID: string
+      +Execute(ctx, clientID, codeChallenge, method, state string, rc RequestCtx) (string, error)
+    }
+    class CallbackCase {
+      -sessions: SessionStore
+      -authcodes: AuthCodeStore
+      -clientCallbackURL: string
+      +Execute(ctx, gatewayPublicURL, state string) (*CallbackResult, error)
+    }
+    class ContinueCase {
+      -sessions: SessionStore
+      -authcodes: AuthCodeStore
+      -trust: TrustService
+      +Execute(ctx, in ContinueInput) error
+      +IssueCodeAfterMFA(ctx, sess *OAuthSession) error
+    }
+    class ExchangeCodeCase {
+      -authcodes: AuthCodeStore
+      -tokens: TokenService
+      -clientSecret: string
+      +Execute(ctx, code, codeVerifier, clientSecret string) (*TokenResponse, error)
+    }
+    class LogoutCase {
+      -tokens: TokenService
+      +Execute(ctx, token string, revokeAll bool) error
+    }
+    class RefreshCase {
+      -tokens: TokenService
+      +Execute(ctx, refreshToken string, rc RequestCtx) (*TokenResponse, error)
+    }
+    class "gateway::MFACase" as GwMFACase {
+      -sessions: SessionStore
+      -mfa: MFAService
+      -cont: *ContinueCase
+      -trust: TrustService
+      +Setup(ctx, state string) (*MFASetupResult, error)
+      +Verify(ctx, state, code string) error
+    }
+    class AuthFlow {
+      -authorize: *AuthorizeCase
+      -cont: *ContinueCase
+      -callback: *CallbackCase
+      -mfa: *MFACase
+      -exchange: *ExchangeCodeCase
+      -refresh: *RefreshCase
+      -logout: *LogoutCase
+      +Authorize(ctx, ...) (string, error)
+      +Continue(ctx, in ContinueInput) error
+      +Callback(ctx, ...) (*CallbackResult, error)
+      +SetupMFA(ctx, state string) (*MFASetupResult, error)
+      +VerifyMFA(ctx, state, code string) error
+      +ExchangeCode(ctx, ...) (*TokenResponse, error)
+      +RefreshToken(ctx, ...) (*TokenResponse, error)
+      +Logout(ctx, ...) error
+    }
+    class TokenGuard {
+      -tokens: TokenService
+      -policy: PolicyEngine
+      -audit: AuditService
+      +Introspect(ctx, token string, rc RequestCtx) (bool, string, []string, float64, error)
+      +AdminRevokeUser(ctx, userID, adminID, reason string) (int, error)
+      +Decide(ctx, ...) (*PolicyDecision, error)
+      +QueryAudit(ctx, params map[string]string) (*AuditQueryResult, error)
+    }
+  }
+
+  package "gateway::transport" {
+    class "gateway::Handler" as GwHandler {
+      -log: *slog.Logger
+      -gatewayPublicURL: string
+      -flow: authFlow
+      -guard: tokenGuard
+      -idp: idpLogoutProvider
+      +RegisterPublic(mux *http.ServeMux)
+      +RegisterPrivate(mux *http.ServeMux)
+    }
+  }
+
+  package "gateway::adapter/redis" {
+    class "gw::RedisAuthCodeStore" as GwRedisAuthCode {
+      -client: *rdb.Client
+      +Save(ctx, a *AuthCode, ttl Duration) error
+      +GetAndDelete(ctx, code string) (*AuthCode, error)
+      +SaveByState(ctx, ...) error
+      +GetByState(ctx, state string) (string, error)
+    }
+    class "gw::RedisSessionStore" as GwRedisSession {
+      -client: *rdb.Client
+      +Save(ctx, sess *OAuthSession, ttl Duration) error
+      +Get(ctx, state string) (*OAuthSession, error)
+      +Delete(ctx, state string) error
+    }
+  }
+
+  package "gateway::adapter/http" {
+    class "gw::AuditClient" as GwAuditClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +QueryEvents(ctx, params map[string]string) (*AuditQueryResult, error)
+    }
+    class "gw::IDPAdapterClient" as GwIDPClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +GetLoginURL(ctx, state string) (string, error)
+      +GetLogoutURL(ctx, postLogoutRedirectURI string) (string, error)
+    }
+    class "gw::MFAClient" as GwMFAClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +Setup(ctx, userID, email string) (*MFASetup, error)
+      +Verify(ctx, userID, code string) (bool, error)
+    }
+    class "gw::OPAClient" as GwOPAClient {
+      -endpoint: string
+      -httpClient: *http.Client
+      +Decide(ctx, userID string, roles []string, trustScore float64, resource, action string) (*PolicyDecision, error)
+    }
+    class "gw::TokenClient" as GwTokenClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +Issue(ctx, userID string, roles []string, trustScore float64) (string, string, error)
+      +Introspect(ctx, token string, rc RequestCtx) (bool, string, []string, float64, error)
+      +Refresh(ctx, ...) (string, string, error)
+      +AdminRevokeUser(ctx, ...) (int, error)
+      +Revoke(ctx, ...) error
+    }
+    class "gw::TrustClient" as GwTrustClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +AnonymousCheck(ctx, rc RequestCtx) (bool, error)
+      +EvaluateTrust(ctx, ...) (float64, string, error)
+      +IncrFails(ctx, userID string) error
+      +ResetFails(ctx, userID string) error
+    }
+  }
+
+  AuthorizeCase --> SessionStore
+  AuthorizeCase --> TrustService
+  AuthorizeCase --> IDPAdapterService
+  CallbackCase --> SessionStore
+  CallbackCase --> AuthCodeStore
+  ContinueCase --> SessionStore
+  ContinueCase --> AuthCodeStore
+  ContinueCase --> TrustService
+  ExchangeCodeCase --> AuthCodeStore
+  ExchangeCodeCase --> TokenService
+  LogoutCase --> TokenService
+  RefreshCase --> TokenService
+  GwMFACase --> SessionStore
+  GwMFACase --> MFAService
+  GwMFACase --> ContinueCase
+  GwMFACase --> TrustService
+  TokenGuard --> TokenService
+  TokenGuard --> PolicyEngine
+  TokenGuard --> AuditService
+  AuthFlow *-- AuthorizeCase
+  AuthFlow *-- ContinueCase
+  AuthFlow *-- CallbackCase
+  AuthFlow *-- GwMFACase
+  AuthFlow *-- ExchangeCodeCase
+  AuthFlow *-- RefreshCase
+  AuthFlow *-- LogoutCase
+  GwHandler --> AuthFlow
+  GwHandler --> TokenGuard
+  GwRedisAuthCode ..|> AuthCodeStore
+  GwRedisSession ..|> SessionStore
+  GwAuditClient ..|> AuditService
+  GwIDPClient ..|> IDPAdapterService
+  GwMFAClient ..|> MFAService
+  GwOPAClient ..|> PolicyEngine
+  GwTokenClient ..|> TokenService
+  GwTrustClient ..|> TrustService
+}
+
+' ============================================================
+' IDPADAPTER
+' ============================================================
+package "idpadapter" #FAF0EE {
+
+  package "idpadapter::entities" {
+    class IDPIdentity {
+      +Sub: string
+      +Email: string
+      +Roles: []string
+    }
+  }
+
+  package "idpadapter::cases" {
+    interface PKCEStore {
+      +Save(ctx, state, verifier string, ttl Duration) error
+      +Get(ctx, state string) (string, error)
+      +Delete(ctx, state string) error
+    }
+    interface OIDCProvider {
+      +AuthorizeURL(state, challenge string) string
+      +Exchange(ctx, code, verifier string) (*IDPIdentity, error)
+    }
+    interface AuthService {
+      +ResolveUser(ctx, sub, email, idp string) (string, error)
+    }
+    interface GatewayService {
+      +Continue(ctx, state, userID, email string, roles []string, rc RequestCtx) error
+    }
+    class "idp::RequestCtx" as IDPRequestCtx {
+      +IP: string
+      +UserAgent: string
+      +Fingerprint: string
+    }
+    class GetLoginURLCase {
+      -pkce: PKCEStore
+      -oidc: OIDCProvider
+      +Execute(ctx, state string) (string, error)
+    }
+    class HandleCallbackCase {
+      -pkce: PKCEStore
+      -oidc: OIDCProvider
+      -auth: AuthService
+      -gateway: GatewayService
+      -gatewayPublicURL: string
+      +Execute(ctx, code, state string, rc RequestCtx) (string, error)
+    }
+    class "idpadapter::Cases" as IDPCases {
+      -getLoginURL: *GetLoginURLCase
+      -handleCallback: *HandleCallbackCase
+      -keycloakIssuer: string
+      -keycloakPublicURL: string
+      -keycloakClientID: string
+      +GetLoginURL(ctx, state string) (string, error)
+      +HandleCallback(ctx, code, state string, rc RequestCtx) (string, error)
+      +GetLogoutURL(postLogoutRedirectURI string) string
+    }
+  }
+
+  package "idpadapter::transport" {
+    interface "idpadapter::UseCases" as IDPUseCases {
+      +GetLoginURL(ctx, state string) (string, error)
+      +HandleCallback(ctx, code, state string, rc RequestCtx) (string, error)
+      +GetLogoutURL(postLogoutRedirectURI string) string
+    }
+    class "idpadapter::Handler" as IDPHandler {
+      -log: *slog.Logger
+      -cases: UseCases
+      +Register(mux *http.ServeMux)
+    }
+  }
+
+  package "idpadapter::adapter/keycloak" {
+    class OIDCClient {
+      -provider: *gooidc.Provider
+      -verifier: *gooidc.IDTokenVerifier
+      -oauth2Config: *oauth2.Config
+      -internalBaseURL: string
+      -publicBaseURL: string
+      +AuthorizeURL(state, challenge string) string
+      +Exchange(ctx, code, verifier string) (*IDPIdentity, error)
+    }
+  }
+
+  package "idpadapter::adapter/redis" {
+    class "idp::PKCEStore" as IDPRedisPKCE {
+      -client: *rdb.Client
+      +Save(ctx, state, verifier string, ttl Duration) error
+      +Get(ctx, state string) (string, error)
+      +Delete(ctx, state string) error
+    }
+  }
+
+  package "idpadapter::adapter/http" {
+    class AuthClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +ResolveUser(ctx, sub, email, idp string) (string, error)
+    }
+    class GatewayClient {
+      -privateURL: string
+      -httpClient: *http.Client
+      +Continue(ctx, state, userID, email string, roles []string, rc RequestCtx) error
+    }
+  }
+
+  GetLoginURLCase --> PKCEStore
+  GetLoginURLCase --> OIDCProvider
+  HandleCallbackCase --> PKCEStore
+  HandleCallbackCase --> OIDCProvider
+  HandleCallbackCase --> AuthService
+  HandleCallbackCase --> GatewayService
+  IDPCases *-- GetLoginURLCase
+  IDPCases *-- HandleCallbackCase
+  IDPHandler --> IDPUseCases
+  IDPCases ..|> IDPUseCases
+  OIDCClient ..|> OIDCProvider
+  IDPRedisPKCE ..|> PKCEStore
+  AuthClient ..|> AuthService
+  GatewayClient ..|> GatewayService
+}
+
+' ============================================================
+' TOKEN
+' ============================================================
+package "token" #F5EEFA {
+
+  package "token::entities" {
+    class AccessToken {
+      +Raw: string
+      +Hash: string
+      +UserID: uuid.UUID
+      +Roles: []string
+      +TrustScore: float64
+      +FamilyID: uuid.UUID
+      +Exp: int64
+    }
+    class RefreshToken {
+      +Raw: string
+      +Hash: string
+      +ATHash: string
+      +UserID: uuid.UUID
+      +Roles: []string
+      +FamilyID: uuid.UUID
+      +Status: Status
+      +Exp: int64
+    }
+    class TokenFamily {
+      +FamilyID: uuid.UUID
+      +UserID: uuid.UUID
+    }
+    enum Status {
+      ACTIVE
+      CONSUMED
+      REVOKED
+    }
+    RefreshToken --> Status
+  }
+
+  package "token::cases" {
+    interface AccessTokenStore {
+      +Save(ctx, raw string, t *AccessToken, ttl Duration) error
+      +Get(ctx, raw string) (*AccessToken, error)
+      +Delete(ctx, raw string) error
+      +DeleteByHash(ctx, hash string) error
+    }
+    interface RefreshTokenStore {
+      +Save(ctx, raw string, t *RefreshToken, ttl Duration) error
+      +Get(ctx, raw string) (*RefreshToken, error)
+      +MarkConsumed(ctx, raw string) error
+      +RevokeFamily(ctx, familyID uuid.UUID) error
+    }
+    interface TokenFamilyStore {
+      +AddToken(ctx, familyID uuid.UUID, tokenHash string) error
+      +GetFamily(ctx, familyID uuid.UUID) ([]string, error)
+      +MarkRevoked(ctx, familyID uuid.UUID) error
+      +IsRevoked(ctx, familyID uuid.UUID) (bool, error)
+      +TrackUserFamily(ctx, userID, familyID uuid.UUID) error
+      +GetUserFamilies(ctx, userID uuid.UUID) ([]uuid.UUID, error)
+    }
+    interface EventPublisher {
+      +Publish(ctx, topic string, payload any) error
+    }
+    interface "token::TrustService" as TokenTrustService {
+      +Evaluate(ctx, tc TrustContext) (float64, string, error)
+    }
+    class TrustContext {
+      +UserID: uuid.UUID
+      +IP: string
+      +UserAgent: string
+      +Fingerprint: string
+    }
+    class IntrospectResult {
+      +Active: bool
+      +ForcedLogout: bool
+      +UserID: uuid.UUID
+      +Roles: []string
+      +TrustScore: float64
+      +Exp: int64
+    }
+    class IssueCase {
+      -access: AccessTokenStore
+      -refresh: RefreshTokenStore
+      -family: TokenFamilyStore
+      +Execute(ctx, userID uuid.UUID, roles []string, trustScore float64) (string, string, error)
+    }
+    class IntrospectCase {
+      -access: AccessTokenStore
+      -refresh: RefreshTokenStore
+      -family: TokenFamilyStore
+      -trust: TrustService
+      -events: EventPublisher
+      +Execute(ctx, rawToken string, tc TrustContext) (*IntrospectResult, error)
+    }
+    class "token::RefreshCase" as TokenRefreshCase {
+      -access: AccessTokenStore
+      -refresh: RefreshTokenStore
+      -family: TokenFamilyStore
+      -events: EventPublisher
+      -trust: TrustService
+      +Execute(ctx, rawRefresh string, tc TrustContext) (string, string, error)
+    }
+    class RevokeCase {
+      -access: AccessTokenStore
+      -refresh: RefreshTokenStore
+      +Execute(ctx, rawToken string, revokeFamily bool) error
+    }
+    class AdminRevokeCase {
+      -family: TokenFamilyStore
+      -refresh: RefreshTokenStore
+      -events: EventPublisher
+      +RevokeUser(ctx, userID uuid.UUID, adminID, reason string) (int, error)
+    }
+    class "token::Cases" as TokenCases {
+      -issue: *IssueCase
+      -introspect: *IntrospectCase
+      -refresh: *RefreshCase
+      -revoke: *RevokeCase
+      -adminRevoke: *AdminRevokeCase
+      +IssueTokens(ctx, userID uuid.UUID, roles []string, trustScore float64) (string, string, error)
+      +Introspect(ctx, rawToken string, tc TrustContext) (*IntrospectResult, error)
+      +Refresh(ctx, rawRefresh string, tc TrustContext) (string, string, error)
+      +Revoke(ctx, rawToken string, revokeFamily bool) error
+      +AdminRevokeUser(ctx, userID uuid.UUID, adminID, reason string) (int, error)
+    }
+  }
+
+  package "token::transport" {
+    interface "token::UseCases" as TokenUseCases {
+      +IssueTokens(ctx, userID uuid.UUID, roles []string, trustScore float64) (string, string, error)
+      +Introspect(ctx, rawToken string, tc TrustContext) (*IntrospectResult, error)
+      +Refresh(ctx, rawRefresh string, tc TrustContext) (string, string, error)
+      +Revoke(ctx, rawToken string, revokeFamily bool) error
+      +AdminRevokeUser(ctx, userID uuid.UUID, adminID, reason string) (int, error)
+    }
+    class "token::Handler" as TokenHandler {
+      -log: *slog.Logger
+      -cases: UseCases
+      +Register(mux *http.ServeMux)
+    }
+  }
+
+  package "token::adapter/redis" {
+    class "tk::AccessTokenStore" as TkRedisAccess {
+      -client: *rdb.Client
+      +Save(ctx, raw string, t *AccessToken, ttl Duration) error
+      +Get(ctx, raw string) (*AccessToken, error)
+      +Delete(ctx, raw string) error
+      +DeleteByHash(ctx, hash string) error
+    }
+    class "tk::RefreshTokenStore" as TkRedisRefresh {
+      -client: *rdb.Client
+      +Save(ctx, raw string, t *RefreshToken, ttl Duration) error
+      +Get(ctx, raw string) (*RefreshToken, error)
+      +MarkConsumed(ctx, raw string) error
+      +RevokeFamily(ctx, familyID uuid.UUID) error
+    }
+    class "tk::TokenFamilyStore" as TkRedisFamily {
+      -client: *rdb.Client
+      +AddToken(ctx, familyID uuid.UUID, tokenHash string) error
+      +GetFamily(ctx, familyID uuid.UUID) ([]string, error)
+      +MarkRevoked(ctx, familyID uuid.UUID) error
+      +IsRevoked(ctx, familyID uuid.UUID) (bool, error)
+      +TrackUserFamily(ctx, userID, familyID uuid.UUID) error
+      +GetUserFamilies(ctx, userID uuid.UUID) ([]uuid.UUID, error)
+    }
+  }
+
+  package "token::adapter/kafka" {
+    class KafkaPublisher {
+      -writer: *kfk.Writer
+      +Publish(ctx, topic string, payload any) error
+      +Close() error
+    }
+  }
+
+  package "token::adapter/http" {
+    class "tk::TrustClient" as TkTrustClient {
+      -baseURL: string
+      -httpClient: *http.Client
+      +Evaluate(ctx, tc TrustContext) (float64, string, error)
+    }
+  }
+
+  IssueCase --> AccessTokenStore
+  IssueCase --> RefreshTokenStore
+  IssueCase --> TokenFamilyStore
+  IntrospectCase --> AccessTokenStore
+  IntrospectCase --> RefreshTokenStore
+  IntrospectCase --> TokenFamilyStore
+  IntrospectCase --> TokenTrustService
+  IntrospectCase --> EventPublisher
+  TokenRefreshCase --> AccessTokenStore
+  TokenRefreshCase --> RefreshTokenStore
+  TokenRefreshCase --> TokenFamilyStore
+  TokenRefreshCase --> EventPublisher
+  TokenRefreshCase --> TokenTrustService
+  RevokeCase --> AccessTokenStore
+  RevokeCase --> RefreshTokenStore
+  AdminRevokeCase --> TokenFamilyStore
+  AdminRevokeCase --> RefreshTokenStore
+  AdminRevokeCase --> EventPublisher
+  TokenCases *-- IssueCase
+  TokenCases *-- IntrospectCase
+  TokenCases *-- TokenRefreshCase
+  TokenCases *-- RevokeCase
+  TokenCases *-- AdminRevokeCase
+  TokenHandler --> TokenUseCases
+  TokenCases ..|> TokenUseCases
+  TkRedisAccess ..|> AccessTokenStore
+  TkRedisRefresh ..|> RefreshTokenStore
+  TkRedisFamily ..|> TokenFamilyStore
+  KafkaPublisher ..|> EventPublisher
+  TkTrustClient ..|> TokenTrustService
+}
+
+' ============================================================
+' TRUST
+' ============================================================
+package "trust" #FAEEF5 {
+
+  package "trust::entities" {
+    class RiskSignal {
+      +Name: string
+      +Score: float64
+      +Weight: float64
+    }
+    class "trust::TrustContext" as TrustCtxEntity {
+      +UserID: uuid.UUID
+      +IPHash: string
+      +Country: string
+      +ASN: string
+      +UserAgent: string
+      +FingerprintHash: string
+      +Timestamp: time.Time
+    }
+    class TrustScore {
+      +Value: float64
+      +Decision: Decision
+      +Signals: []RiskSignal
+    }
+    enum Decision {
+      ALLOW
+      MFA_REQUIRED
+      STEP_UP
+      DENY
+    }
+    TrustScore --> Decision
+    TrustScore *-- RiskSignal
+  }
+
+  package "trust::cases" {
+    interface DeviceRepository {
+      +IsKnownDevice(ctx, userID, fingerprintHash string) (bool, error)
+      +SaveDevice(ctx, userID, fingerprintHash, uaHash string) error
+    }
+    interface IPReputation {
+      +Lookup(ctx, ip string) (*IPInfo, error)
+    }
+    interface LoginHistoryRepository {
+      +LastLogin(ctx, userID uuid.UUID) (*LoginRecord, error)
+      +Save(ctx, record *LoginRecord) error
+    }
+    interface TrustCache {
+      +GetLastContext(ctx, userID uuid.UUID) (*TrustContext, error)
+      +SetLastContext(ctx, userID uuid.UUID, tc *TrustContext, ttl Duration) error
+      +GetDeviceSet(ctx, userID uuid.UUID) ([]string, error)
+      +AddDevice(ctx, userID uuid.UUID, hash string) error
+      +GetFails(ctx, userID uuid.UUID) (int64, error)
+      +IncrFails(ctx, userID uuid.UUID) (int64, error)
+      +ResetFails(ctx, userID uuid.UUID) error
+      +IncrIPFails(ctx, ipHash string) (int64, error)
+    }
+    class IPInfo {
+      +Type: string
+      +ASN: string
+      +Country: string
+      +IsTor: bool
+      +IsDatacenter: bool
+    }
+    class LoginRecord {
+      +UserID: uuid.UUID
+      +IPHash: string
+      +Country: string
+      +ASN: string
+      +Timestamp: time.Time
+    }
+    class EvaluateTrustInput {
+      +UserID: uuid.UUID
+      +Roles: []string
+      +IP: string
+      +UserAgent: string
+      +Fingerprint: string
+      +Timestamp: time.Time
+      +Register: bool
+    }
+    class AnonymousCheckResult {
+      +Decision: string
+      +Reason: string
+    }
+    class EvaluateTrustCase {
+      -devices: DeviceRepository
+      -loginHistory: LoginHistoryRepository
+      -cache: TrustCache
+      -ipRep: IPReputation
+      -salt: string
+      +Execute(ctx, in EvaluateTrustInput) (*TrustScore, error)
+    }
+    class AnonymousCheckCase {
+      -ipRep: IPReputation
+      -cache: TrustCache
+      -salt: string
+      +Execute(ctx, ip, userAgent, fingerprint string) (*AnonymousCheckResult, error)
+    }
+    class "trust::Cases" as TrustCases {
+      -anonCheck: *AnonymousCheckCase
+      -evalTrust: *EvaluateTrustCase
+      -trustCache: TrustCache
+      +AnonymousCheck(ctx, ip, userAgent, fingerprint string) (*AnonymousCheckResult, error)
+      +Evaluate(ctx, in EvaluateTrustInput) (*TrustScore, error)
+      +IncrFails(ctx, userID uuid.UUID) (int64, error)
+      +ResetFails(ctx, userID uuid.UUID) error
+    }
+  }
+
+  package "trust::transport" {
+    interface "trust::UseCases" as TrustUseCases {
+      +AnonymousCheck(ctx, ip, userAgent, fingerprint string) (*AnonymousCheckResult, error)
+      +Evaluate(ctx, in EvaluateTrustInput) (*TrustScore, error)
+      +IncrFails(ctx, userID uuid.UUID) (int64, error)
+      +ResetFails(ctx, userID uuid.UUID) error
+    }
+    class "trust::Handler" as TrustHandler {
+      -log: *slog.Logger
+      -cases: UseCases
+      +Register(mux *http.ServeMux)
+    }
+  }
+
+  package "trust::adapter/postgres" {
+    class WorkingHoursRepo {
+      -db: *pgxpool.Pool
+      +Get(ctx, userID uuid.UUID) (start, end int, error)
+    }
+    class DeviceRepo {
+      -db: *pgxpool.Pool
+      +IsKnownDevice(ctx, userID, fingerprintHash string) (bool, error)
+      +SaveDevice(ctx, userID, fingerprintHash, uaHash string) error
+    }
+    class LoginHistoryRepo {
+      -db: *pgxpool.Pool
+      +LastLogin(ctx, userID uuid.UUID) (*LoginRecord, error)
+      +Save(ctx, record *LoginRecord) error
+    }
+  }
+
+  package "trust::adapter/redis" {
+    class "tr::TrustCache" as TrRedisCache {
+      -client: *rdb.Client
+      +GetLastContext(ctx, userID uuid.UUID) (*TrustContext, error)
+      +SetLastContext(ctx, ...) error
+      +GetDeviceSet(ctx, userID uuid.UUID) ([]string, error)
+      +AddDevice(ctx, userID uuid.UUID, hash string) error
+      +GetFails(ctx, userID uuid.UUID) (int64, error)
+      +IncrFails(ctx, userID uuid.UUID) (int64, error)
+      +ResetFails(ctx, userID uuid.UUID) error
+      +IncrIPFails(ctx, ipHash string) (int64, error)
+    }
+    class IPRepCache {
+      -client: *rdb.Client
+      +Get(ctx, ipHash string) (*IPInfo, error)
+      +Set(ctx, ipHash string, info *IPInfo, ttl Duration) error
+    }
+  }
+
+  package "trust::adapter/http" {
+    class IPReputationClient {
+      -cache: ipCacheStore
+      -httpClient: *http.Client
+      -salt: string
+      +Lookup(ctx, ip string) (*IPInfo, error)
+    }
+  }
+
+  EvaluateTrustCase --> DeviceRepository
+  EvaluateTrustCase --> LoginHistoryRepository
+  EvaluateTrustCase --> TrustCache
+  EvaluateTrustCase --> IPReputation
+  AnonymousCheckCase --> IPReputation
+  AnonymousCheckCase --> TrustCache
+  TrustCases *-- AnonymousCheckCase
+  TrustCases *-- EvaluateTrustCase
+  TrustCases --> TrustCache
+  TrustHandler --> TrustUseCases
+  TrustCases ..|> TrustUseCases
+  DeviceRepo ..|> DeviceRepository
+  LoginHistoryRepo ..|> LoginHistoryRepository
+  TrRedisCache ..|> TrustCache
+  IPReputationClient ..|> IPReputation
+  IPRepCache --> IPReputationClient
+}
+
+@enduml

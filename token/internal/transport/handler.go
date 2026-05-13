@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/zero-trust/zero-trust-auth/token/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/token/internal/entities"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
 	tkmetrics "github.com/zero-trust/zero-trust-auth/toolkit/pkg/metrics"
 )
@@ -33,9 +34,10 @@ func (h *Handler) Register(mux *http.ServeMux) {
 
 func (h *Handler) handleIssue(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		UserID     string   `json:"user_id"`
-		Roles      []string `json:"roles"`
-		TrustScore float64  `json:"trust_score"`
+		UserID       string                        `json:"user_id"`
+		Roles        []string                      `json:"roles"`
+		TrustScore   float64                       `json:"trust_score"`
+		LoginSignals map[string]entities.Signal    `json:"login_signals"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -46,7 +48,7 @@ func (h *Handler) handleIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid user_id", http.StatusBadRequest)
 		return
 	}
-	atRaw, rtRaw, err := h.cases.IssueTokens(r.Context(), userID, req.Roles, req.TrustScore)
+	atRaw, rtRaw, err := h.cases.IssueTokens(r.Context(), userID, req.Roles, req.TrustScore, req.LoginSignals)
 	if err != nil {
 		h.log.Error("issue failed", "error", err)
 		http.Error(w, "internal server error", http.StatusInternalServerError)
@@ -85,11 +87,12 @@ func (h *Handler) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 		metricIntrospectTotal.WithLabelValues("inactive").Inc()
 	}
 	writeJSON(w, map[string]any{
-		"active":      result.Active,
-		"user_id":     result.UserID,
-		"roles":       result.Roles,
-		"trust_score": result.TrustScore,
-		"exp":         result.Exp,
+		"active":        result.Active,
+		"user_id":       result.UserID,
+		"roles":         result.Roles,
+		"trust_score":   result.TrustScore,
+		"login_signals": result.LoginSignals,
+		"exp":           result.Exp,
 	})
 }
 

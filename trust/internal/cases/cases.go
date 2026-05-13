@@ -2,11 +2,14 @@ package cases
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/zero-trust/zero-trust-auth/trust/internal/entities"
 )
+
+const syncFailsTTL = 15 * time.Minute
 
 type Cases struct {
 	anonCheck  *AnonymousCheckCase
@@ -32,4 +35,8 @@ func (c *Cases) IncrFails(ctx context.Context, userID uuid.UUID) (int64, error) 
 
 func (c *Cases) ResetFails(ctx context.Context, userID uuid.UUID) error {
 	return c.trustCache.ResetFails(ctx, userID)
+}
+
+func (c *Cases) SyncFails(ctx context.Context, userID uuid.UUID, count int64) error {
+	return c.trustCache.SetFails(ctx, userID, count, syncFailsTTL)
 }

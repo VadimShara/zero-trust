@@ -17,5 +17,7 @@ type TrustCache interface {
 	GetFails(ctx context.Context, userID uuid.UUID) (int64, error)
 	IncrFails(ctx context.Context, userID uuid.UUID) (int64, error)
 	ResetFails(ctx context.Context, userID uuid.UUID) error
+	SetFails(ctx context.Context, userID uuid.UUID, count int64, ttl time.Duration) error
+	GetIPFails(ctx context.Context, ipHash string) (int64, error)
 	IncrIPFails(ctx context.Context, ipHash string) (int64, error)
 }

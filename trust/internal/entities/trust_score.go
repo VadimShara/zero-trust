@@ -15,13 +15,13 @@ type TrustScore struct {
 	Signals  []RiskSignal
 }
 
-func (t TrustScore) Decide() Decision {
+func (t TrustScore) Decide(allow, mfaRequired, stepUp float64) Decision {
 	switch {
-	case t.Value >= 0.70:
+	case t.Value >= allow:
 		return Allow
-	case t.Value >= 0.50:
+	case t.Value >= mfaRequired:
 		return MFARequired
-	case t.Value >= 0.30:
+	case t.Value >= stepUp:
 		return StepUp
 	default:
 		return Deny

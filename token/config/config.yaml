@@ -1,0 +1,16 @@
+server:
+  addr: ":8080"
+
+redis:
+  url: "${REDIS_URL}"
+
+kafka:
+  brokers:
+    - "${KAFKA_BROKERS}"
+
+services:
+  trust: "${TRUST_SERVICE_URL}"
+
+tokens:
+  access_ttl: 1h
+  refresh_ttl: 168h

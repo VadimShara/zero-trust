@@ -10,7 +10,7 @@ import (
 	"github.com/zero-trust/zero-trust-auth/token/internal/cases"
 )
 
-const familyTTL = 7 * 24 * time.Hour // matches refresh token TTL
+const familyTTL = 7 * 24 * time.Hour
 
 type TokenFamilyStore struct {
 	client *rdb.Client
@@ -22,7 +22,6 @@ func NewTokenFamilyStore(client *rdb.Client) *TokenFamilyStore {
 	return &TokenFamilyStore{client: client}
 }
 
-// key: family:{familyID}  TTL 7d  — Redis SET of refresh token hashes
 func (s *TokenFamilyStore) AddToken(ctx context.Context, familyID uuid.UUID, tokenHash string) error {
 	key := familyKey(familyID)
 	pipe := s.client.Pipeline()
@@ -36,7 +35,6 @@ func (s *TokenFamilyStore) GetFamily(ctx context.Context, familyID uuid.UUID) ([
 	return s.client.SMembers(ctx, familyKey(familyID)).Result()
 }
 
-// key: family:revoked:{familyID}  TTL = accessTTL (access tokens can't outlive this)
 func (s *TokenFamilyStore) MarkRevoked(ctx context.Context, familyID uuid.UUID) error {
 	return s.client.Set(ctx, revokedKey(familyID), 1, familyTTL).Err()
 }
@@ -52,7 +50,6 @@ func (s *TokenFamilyStore) IsRevoked(ctx context.Context, familyID uuid.UUID) (b
 	return true, nil
 }
 
-// key: user:families:{userID}  TTL 7d  — SET of familyIDs issued to this user
 func (s *TokenFamilyStore) TrackUserFamily(ctx context.Context, userID, familyID uuid.UUID) error {
 	key := "user:families:" + userID.String()
 	pipe := s.client.Pipeline()

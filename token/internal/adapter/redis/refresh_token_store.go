@@ -25,7 +25,6 @@ func NewRefreshTokenStore(client *rdb.Client) *RefreshTokenStore {
 	return &RefreshTokenStore{client: client}
 }
 
-// key: token:refresh:{sha256(raw)}  TTL 7d
 func (s *RefreshTokenStore) Save(ctx context.Context, raw string, t *entities.RefreshToken, ttl time.Duration) error {
 	data, err := json.Marshal(t)
 	if err != nil {
@@ -53,8 +52,6 @@ func (s *RefreshTokenStore) MarkConsumed(ctx context.Context, raw string) error 
 	return s.setStatus(ctx, refreshKey(raw), entities.Consumed)
 }
 
-// RevokeFamily marks every refresh token in the family as Revoked.
-// family:{familyID} holds the set of refresh token hashes (sha256 of raw).
 func (s *RefreshTokenStore) RevokeFamily(ctx context.Context, familyID uuid.UUID) error {
 	hashes, err := s.client.SMembers(ctx, familyKey(familyID)).Result()
 	if err != nil {
@@ -62,18 +59,16 @@ func (s *RefreshTokenStore) RevokeFamily(ctx context.Context, familyID uuid.UUID
 	}
 	for _, hash := range hashes {
 		key := fmt.Sprintf("token:refresh:%s", hash)
-		_ = s.setStatus(ctx, key, entities.Revoked) // best-effort per token
+		_ = s.setStatus(ctx, key, entities.Revoked)
 	}
 	return nil
 }
 
-// setStatus reads the stored token, updates its Status, and writes it back
-// keeping the original TTL intact (rdb.KeepTTL = -1).
 func (s *RefreshTokenStore) setStatus(ctx context.Context, key string, status entities.Status) error {
 	val, err := s.client.Get(ctx, key).Result()
 	if err != nil {
 		if errors.Is(err, rdb.Nil) {
-			return nil // already gone — treat as success
+			return nil
 		}
 		return err
 	}

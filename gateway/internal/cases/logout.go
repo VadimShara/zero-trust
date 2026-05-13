@@ -1,9 +1,6 @@
 package cases
 
-import (
-	"context"
-
-)
+import "context"
 
 type LogoutCase struct {
 	tokens TokenService

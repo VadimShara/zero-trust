@@ -1,0 +1,110 @@
+@startuml er-trust
+title ER-диаграмма: trust
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+' ── PostgreSQL ──────────────────────────────────────────────
+
+package "PostgreSQL" #FAFAEE {
+
+  entity "trust_device_fingerprints" as devices {
+    * id               : UUID <<PK>> <<gen_random_uuid()>>
+    --
+    * user_id          : UUID <<FK-логический>>
+    * fingerprint_hash : TEXT
+    * ua_hash          : TEXT
+    * first_seen       : TIMESTAMPTZ
+    * last_seen        : TIMESTAMPTZ
+    * seen_count       : INT <<DEFAULT 1>>
+  }
+
+  note right of devices
+    Уникальный индекс: (user_id, fingerprint_hash)
+    Индекс: idx_trust_devices_user_id
+  end note
+
+  entity "trust_login_history" as login_hist {
+    * id             : UUID <<PK>> <<gen_random_uuid()>>
+    --
+    * user_id        : UUID <<FK-логический>>
+    * ip_hash        : TEXT
+      country        : TEXT <<nullable>>
+      asn            : TEXT <<nullable>>
+    * timestamp      : TIMESTAMPTZ
+    * was_successful : BOOLEAN
+      trust_score    : FLOAT <<nullable>>
+      decision       : TEXT <<nullable>>
+  }
+
+  note right of login_hist
+    Индексы:
+    · idx_login_history_user_id
+    · idx_login_history_timestamp DESC
+  end note
+
+  entity "trust_working_hours" as working_hours {
+    * user_id       : UUID <<PK>> <<FK-логический>>
+    --
+    * timezone      : TEXT <<DEFAULT 'UTC'>>
+    * typical_start : INT  <<DEFAULT 8>>
+    * typical_end   : INT  <<DEFAULT 20>>
+    * updated_at    : TIMESTAMPTZ
+  }
+
+}
+
+' ── Redis ───────────────────────────────────────────────────
+
+package "Redis (cache)" #FFFDE7 {
+
+  entity "TrustContext\n[key: trust_ctx:{user_id}]" as trust_ctx {
+    * user_id          : UUID <<key>>
+    --
+    * ip_hash          : string
+    * country          : string
+    * asn              : string
+    * user_agent       : string
+    * fingerprint_hash : string
+    * timestamp        : time.Time
+  }
+
+  entity "DeviceSet\n[key: devices:{user_id}]" as dev_set {
+    * user_id          : UUID <<key>>
+    --
+    * fingerprint_hash : []string <<SET>>
+  }
+
+  entity "FailCounter\n[key: fails:{user_id}]" as fails {
+    * user_id : UUID <<key>>
+    --
+    * count   : int64
+  }
+
+  entity "IPFailCounter\n[key: ip_fails:{ip_hash}]" as ip_fails {
+    * ip_hash : string <<key>>
+    --
+    * count   : int64
+  }
+
+  entity "IPRepCache\n[key: iprep:{ip_hash}]" as iprep {
+    * ip_hash      : string <<key>>
+    --
+    * type         : string
+    * asn          : string
+    * country      : string
+    * is_tor       : bool
+    * is_datacenter: bool
+  }
+
+}
+
+' ── связи user_id ────────────────────────────────────────────
+
+devices       }o..|| trust_ctx  : user_id (логический)
+login_hist    }o..|| trust_ctx  : user_id (логический)
+working_hours  |o..|| trust_ctx : user_id (логический)
+dev_set        |o..|| trust_ctx : user_id (логический)
+fails          |o..|| trust_ctx : user_id (логический)
+
+@enduml

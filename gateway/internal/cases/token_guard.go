@@ -1,6 +1,10 @@
 package cases
 
-import "context"
+import (
+	"context"
+
+	"github.com/zero-trust/zero-trust-auth/gateway/internal/entities"
+)
 
 type TokenGuard struct {
 	tokens TokenService
@@ -12,7 +16,7 @@ func NewTokenGuard(tokens TokenService, policy PolicyEngine, audit AuditService)
 	return &TokenGuard{tokens: tokens, policy: policy, audit: audit}
 }
 
-func (g *TokenGuard) Introspect(ctx context.Context, token string, rc RequestCtx) (bool, string, []string, float64, error) {
+func (g *TokenGuard) Introspect(ctx context.Context, token string, rc RequestCtx) (bool, string, []string, float64, map[string]entities.Signal, error) {
 	return g.tokens.Introspect(ctx, token, rc)
 }
 

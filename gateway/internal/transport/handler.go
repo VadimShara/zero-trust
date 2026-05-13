@@ -1,14 +1,18 @@
 package transport
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"html/template"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
 	pkgerrors "github.com/zero-trust/zero-trust-auth/toolkit/pkg/errors"
@@ -21,10 +25,21 @@ type Handler struct {
 	gatewayPublicURL string
 	flow             authFlow
 	guard            tokenGuard
+	idp              idpLogoutProvider
 }
 
-func NewHandler(log *slog.Logger, gatewayPublicURL string, flow authFlow, guard tokenGuard) *Handler {
-	return &Handler{log: log, gatewayPublicURL: gatewayPublicURL, flow: flow, guard: guard}
+type idpLogoutProvider interface {
+	GetLogoutURL(ctx context.Context, postLogoutRedirectURI string) (string, error)
+}
+
+func NewHandler(log *slog.Logger, gatewayPublicURL string, flow authFlow, guard tokenGuard, idp idpLogoutProvider) *Handler {
+	return &Handler{
+		log:              log,
+		gatewayPublicURL: gatewayPublicURL,
+		flow:             flow,
+		guard:            guard,
+		idp:              idp,
+	}
 }
 
 func (h *Handler) RegisterPublic(mux *http.ServeMux) {
@@ -34,6 +49,7 @@ func (h *Handler) RegisterPublic(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /authorize", h.authorize)
 	mux.HandleFunc("GET /callback", h.callback)
+	mux.HandleFunc("GET /sso-logout", h.ssoLogout)
 	mux.HandleFunc("GET /mfa", h.mfaGet)
 	mux.HandleFunc("POST /mfa", h.mfaPost)
 	mux.HandleFunc("POST /token", h.token)
@@ -49,6 +65,19 @@ func (h *Handler) RegisterPublic(mux *http.ServeMux) {
 
 func (h *Handler) RegisterPrivate(mux *http.ServeMux) {
 	mux.HandleFunc("POST /internal/continue", h.internalContinue)
+}
+
+func (h *Handler) ssoLogout(w http.ResponseWriter, r *http.Request) {
+	postLogout := r.URL.Query().Get("redirect_uri")
+	if postLogout == "" {
+		postLogout = h.gatewayPublicURL
+	}
+	logoutURL, err := h.idp.GetLogoutURL(r.Context(), postLogout)
+	if err != nil {
+		http.Error(w, "logout unavailable", http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, logoutURL, http.StatusFound)
 }
 
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) {
@@ -215,19 +244,19 @@ func (h *Handler) introspect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	active, userID, roles, score, err := h.guard.Introspect(r.Context(), req.Token, requestCtx(r))
+	active, userID, roles, score, signals, err := h.guard.Introspect(r.Context(), req.Token, requestCtx(r))
 	if err != nil {
 		http.Error(w, "server error", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, map[string]any{
-		"active": active, "user_id": userID, "roles": roles, "trust_score": score,
+		"active": active, "user_id": userID, "roles": roles, "trust_score": score, "login_signals": signals,
 	})
 }
 
 func (h *Handler) adminRevoke(w http.ResponseWriter, r *http.Request) {
 	adminToken := bearerToken(r)
-	_, adminID, _, _, _ := h.guard.Introspect(r.Context(), adminToken, requestCtx(r))
+	_, adminID, _, _, _, _ := h.guard.Introspect(r.Context(), adminToken, requestCtx(r))
 
 	targetUserID := r.PathValue("id")
 	if targetUserID == "" {
@@ -313,7 +342,7 @@ func (h *Handler) apiAuthMiddleware() func(http.Handler) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			active, userID, roles, score, err := h.guard.Introspect(r.Context(), token, requestCtx(r))
+			active, userID, roles, score, _, err := h.guard.Introspect(r.Context(), token, requestCtx(r))
 			if err != nil || !active {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -354,10 +383,75 @@ func (h *Handler) apiAuthMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
+var gwIPCache struct {
+	sync.Mutex
+	ip         string
+	resolvedAt time.Time
+}
+
+const gwIPCacheTTL = 10 * time.Second
+
+var gwHTTPClient = &http.Client{Timeout: 3 * time.Second}
+
+func resolvePublicIP() string {
+	gwIPCache.Lock()
+	defer gwIPCache.Unlock()
+	if gwIPCache.ip != "" && time.Since(gwIPCache.resolvedAt) < gwIPCacheTTL {
+		return gwIPCache.ip
+	}
+	for _, endpoint := range []string{"https://api.ipify.org", "https://ifconfig.me/ip"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+		resp, err := gwHTTPClient.Do(req)
+		cancel()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		ip := strings.TrimSpace(string(b))
+		if net.ParseIP(ip) != nil && !isPrivateIP(ip) {
+			gwIPCache.ip = ip
+			gwIPCache.resolvedAt = time.Now()
+			return ip
+		}
+	}
+	return gwIPCache.ip
+}
+
+func isPrivateIP(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return true
+	}
+	for _, cidr := range []string{
+		"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
+		"192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+	} {
+		_, block, _ := net.ParseCIDR(cidr)
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func requestCtx(r *http.Request) cases.RequestCtx {
 	ip := r.Header.Get("X-Real-IP")
 	if ip == "" {
 		ip, _, _ = net.SplitHostPort(r.RemoteAddr)
+	}
+	if isPrivateIP(ip) {
+		if pub := resolvePublicIP(); pub != "" {
+			ip = pub
+		}
 	}
 	fp := r.Header.Get("X-TLS-Fingerprint")
 	if fp == "" {
@@ -374,7 +468,6 @@ func softFingerprint(r *http.Request) string {
 	h := sha256.New()
 	for _, hdr := range []string{
 		r.Header.Get("User-Agent"),
-		r.Header.Get("Accept"),
 		r.Header.Get("Accept-Language"),
 		r.Header.Get("Accept-Encoding"),
 	} {

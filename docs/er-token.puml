@@ -1,0 +1,60 @@
+@startuml er-token
+title ER-диаграмма: token (Redis)
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+skinparam entityBackgroundColor #FFFDE7
+
+note as N1
+  Сервис использует только Redis.
+  Реляционной БД нет.
+  Все записи имеют TTL.
+end note
+
+entity "AccessToken\n[key: at:{raw}]" as at {
+  * raw         : string <<key, не хранится>>
+  * hash        : string <<sha256(raw)>>
+  --
+  * user_id     : UUID
+  * roles       : []string
+  * trust_score : float64
+  * family_id   : UUID
+  * exp         : int64
+}
+
+entity "RefreshToken\n[key: rt:{raw}]" as rt {
+  * raw       : string <<key, не хранится>>
+  * hash      : string <<sha256(raw)>>
+  --
+  * at_hash   : string <<sha256 парного AT>>
+  * user_id   : UUID
+  * roles     : []string
+  * family_id : UUID
+  * status    : ACTIVE | CONSUMED | REVOKED
+  * exp       : int64
+}
+
+entity "TokenFamily\n[key: family:{family_id}]" as family {
+  * family_id    : UUID <<key>>
+  --
+  * token_hashes : []string
+    revoked      : bool
+}
+
+entity "UserFamilies\n[key: user_families:{user_id}]" as userfam {
+  * user_id    : UUID <<key>>
+  --
+  * family_ids : []UUID
+}
+
+at      }o--|| family    : family_id
+rt      }o--|| family    : family_id
+family  }o--|| userfam   : отслеживается
+rt      ..>    at         : at_hash → удаляет AT\nпри ротации
+
+note bottom of rt
+  status = CONSUMED при ротации
+  status = REVOKED при отзыве всей семьи
+end note
+
+@enduml

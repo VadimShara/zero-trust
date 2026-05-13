@@ -2,19 +2,19 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	rdb "github.com/redis/go-redis/v9"
 
+	gatewaycfg "github.com/zero-trust/zero-trust-auth/gateway/config"
 	httpadapter "github.com/zero-trust/zero-trust-auth/gateway/internal/adapter/http"
 	redisadapter "github.com/zero-trust/zero-trust-auth/gateway/internal/adapter/redis"
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/cases"
 	"github.com/zero-trust/zero-trust-auth/gateway/internal/transport"
+	pkgconfig "github.com/zero-trust/zero-trust-auth/toolkit/pkg/config"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/httpserver"
 	"github.com/zero-trust/zero-trust-auth/toolkit/pkg/logger"
 )
@@ -22,19 +22,13 @@ import (
 func main() {
 	log := logger.NewLogger("")
 
-	redisURL := requireEnv(log, "REDIS_URL")
-	clientID := requireEnv(log, "CLIENT_ID")
-	clientSecret := requireEnv(log, "CLIENT_SECRET")
-	trustURL := requireEnv(log, "TRUST_SERVICE_URL")
-	tokenURL := requireEnv(log, "TOKEN_SERVICE_URL")
-	idpURL := requireEnv(log, "IDPADAPTER_URL")
-	opaURL := requireEnv(log, "OPA_URL")
-	authURL := requireEnv(log, "AUTH_SERVICE_URL")
-	auditURL := requireEnv(log, "AUDIT_SERVICE_URL")
-	clientCallbackURL := env("CLIENT_CALLBACK_URL", "http://localhost:4000/callback")
-	gatewayPublicURL := env("GATEWAY_PUBLIC_URL", "http://localhost:3000")
+	var cfg gatewaycfg.Config
+	if err := pkgconfig.Load(pkgconfig.Path(), &cfg); err != nil {
+		log.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
 
-	opt, err := rdb.ParseURL(redisURL)
+	opt, err := rdb.ParseURL(cfg.Redis.URL)
 	if err != nil {
 		log.Error("redis url parse failed", "error", err)
 		os.Exit(1)
@@ -48,25 +42,25 @@ func main() {
 
 	sessions := redisadapter.NewSessionStore(redisClient)
 	authcodes := redisadapter.NewAuthCodeStore(redisClient)
-	trustSvc := httpadapter.NewTrustClient(trustURL)
-	tokenSvc := httpadapter.NewTokenClient(tokenURL)
-	idpSvc := httpadapter.NewIDPAdapterClient(idpURL)
-	opaEngine := httpadapter.NewOPAClient(opaURL)
-	mfaSvc := httpadapter.NewMFAClient(authURL)
-	auditClient := httpadapter.NewAuditClient(auditURL)
+	trustSvc := httpadapter.NewTrustClient(cfg.Services.Trust)
+	tokenSvc := httpadapter.NewTokenClient(cfg.Services.Token)
+	idpSvc := httpadapter.NewIDPAdapterClient(cfg.Services.IDPAdapter)
+	opaEngine := httpadapter.NewOPAClient(cfg.Services.OPA)
+	mfaSvc := httpadapter.NewMFAClient(cfg.Services.Auth)
+	auditClient := httpadapter.NewAuditClient(cfg.Services.Audit)
 
-	authorizeCase := cases.NewAuthorizeCase(sessions, trustSvc, idpSvc, clientID)
+	authorizeCase := cases.NewAuthorizeCase(sessions, trustSvc, idpSvc, cfg.Client.ID)
 	continueCase := cases.NewContinueCase(sessions, authcodes, trustSvc)
-	callbackCase := cases.NewCallbackCase(sessions, authcodes, clientCallbackURL)
+	callbackCase := cases.NewCallbackCase(sessions, authcodes, cfg.Client.CallbackURL)
 	mfaCase := cases.NewMFACase(sessions, mfaSvc, continueCase, trustSvc)
-	exchangeCase := cases.NewExchangeCodeCase(authcodes, tokenSvc, clientSecret)
+	exchangeCase := cases.NewExchangeCodeCase(authcodes, tokenSvc, cfg.Client.Secret)
 	refreshCase := cases.NewRefreshCase(tokenSvc)
 	logoutCase := cases.NewLogoutCase(tokenSvc)
 
 	flow := cases.NewAuthFlow(authorizeCase, continueCase, callbackCase, mfaCase, exchangeCase, refreshCase, logoutCase)
 	guard := cases.NewTokenGuard(tokenSvc, opaEngine, auditClient)
 
-	h := transport.NewHandler(log, gatewayPublicURL, flow, guard)
+	h := transport.NewHandler(log, cfg.Public.GatewayURL, flow, guard, idpSvc)
 
 	pub := http.NewServeMux()
 	h.RegisterPublic(pub)
@@ -74,8 +68,8 @@ func main() {
 	priv := http.NewServeMux()
 	h.RegisterPrivate(priv)
 
-	pubSrv := httpserver.New(":3000", pub)
-	privSrv := httpserver.New(":8081", priv)
+	pubSrv := httpserver.New(cfg.Server.PublicAddr, pub)
+	privSrv := httpserver.New(cfg.Server.PrivateAddr, priv)
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -84,27 +78,9 @@ func main() {
 	go func() { errCh <- pubSrv.Run(sigCtx) }()
 	go func() { errCh <- privSrv.Run(sigCtx) }()
 
-	log.Info("gateway starting", "public", ":3000", "private", ":8081")
+	log.Info("gateway starting", "public", cfg.Server.PublicAddr, "private", cfg.Server.PrivateAddr)
 	if err := <-errCh; err != nil {
 		log.Error("server failed", "error", err)
 		os.Exit(1)
 	}
 }
-
-func requireEnv(log *slog.Logger, key string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		log.Error("required env var not set", "key", key)
-		os.Exit(1)
-	}
-	return v
-}
-
-func env(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-var _ = strings.Contains

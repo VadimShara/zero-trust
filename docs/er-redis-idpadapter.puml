@@ -1,0 +1,22 @@
+@startuml er-redis-idpadapter
+title IdpAdapter — Redis Key Schema
+
+skinparam class {
+  BackgroundColor<<STRING>> #DDEEFF
+  BorderColor               #555555
+  ArrowColor                #555555
+}
+
+class "idp:pkce:{state}" <<STRING>> {
+  TTL: 10m
+  --
+  value : string (code_verifier)
+}
+
+note bottom of "idp:pkce:{state}"
+  Хранит PKCE code_verifier для текущего
+  OAuth-флоу с внешним IdP (Keycloak).
+  Ключ — state из исходного запроса.
+end note
+
+@enduml

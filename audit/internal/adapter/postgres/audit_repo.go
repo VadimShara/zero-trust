@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/zero-trust/zero-trust-auth/audit/internal/entities"
 	"github.com/zero-trust/zero-trust-auth/audit/internal/cases"
+	"github.com/zero-trust/zero-trust-auth/audit/internal/entities"
 )
 
 type AuditRepo struct {
@@ -39,7 +39,6 @@ func (r *AuditRepo) Query(ctx context.Context, f cases.QueryFilter) ([]*entities
 		f.Limit = 50
 	}
 
-	// Build WHERE clause dynamically.
 	where := []string{"1=1"}
 	args := []any{}
 	n := 1
@@ -67,14 +66,12 @@ func (r *AuditRepo) Query(ctx context.Context, f cases.QueryFilter) ([]*entities
 
 	cond := strings.Join(where, " AND ")
 
-	// Total count.
 	var total int
 	countQ := fmt.Sprintf("SELECT COUNT(*) FROM audit_log WHERE %s", cond)
 	if err := r.db.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
-	// Data page.
 	dataQ := fmt.Sprintf(`
 		SELECT id, event_type, user_id, payload, created_at
 		FROM audit_log
